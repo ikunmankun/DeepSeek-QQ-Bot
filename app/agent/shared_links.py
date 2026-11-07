@@ -143,6 +143,12 @@ class ShareReadAccess:
                         # hard stop above.
                         if self._mentioned(raw, row):
                             self._grants.append(_ShareGrant(row.id, quoted.id, _fingerprint(row), _fingerprint(quoted)))
+                    elif _app_links(raw) and row.id in addressed:
+                        # 本机补丁：当前 direct reply 的目标本身就是一张卡片
+                        # （主人直接甩卡片、不引用不@）。路由已把这条消息定为
+                        # 本轮交互对象，卡片元数据应可读；不当轮目标的卡片仍走
+                        # 上面的“引用+提及”路径。
+                        self._grants.append(_ShareGrant(row.id, row.id, _fingerprint(row), _fingerprint(row)))
                     elif (not _app_links(raw) and not _SHARE_REFERENCE.search(text)
                             and (row.id in addressed or self._mentioned(raw, row, private=False)
                                  or _QUESTION.search(request_text) or _REQUEST.search(request_text)
@@ -190,7 +196,9 @@ class ShareReadAccess:
                     if not self._usable(trigger) or _fingerprint(trigger) != grant.trigger_fingerprint:
                         continue
                     if grant.target_id is not None:
-                        target = self._quoted(session, trigger)
+                        # 自引用 grant（target 即触发消息本身）直接复用 trigger 行；
+                        # 引用式 grant 仍从 reply 链取被引卡片。
+                        target = trigger if grant.target_id == grant.trigger_id else self._quoted(session, trigger)
                         if (not self._usable(target) or target.id != grant.target_id
                                 or _fingerprint(target) != grant.target_fingerprint):
                             continue
@@ -385,4 +393,4 @@ def build_share_tools(context, *, access=None) -> tuple[AgentTool, ...]:
             code = str(exc) if str(exc).startswith('share_') else 'share_source_malformed'
             return ToolOutcome({'error': code}, 'blocked')
 
-    return (AgentTool('read_message_links', '读取当前消息真实引用的 APP 卡片标题、摘要和链接；source_id优先传share_sources或quoted_message中的卡片来源ID，也接受当前获准提问的source_id并解析其唯一引用卡片。群聊须引用并@小町或提到小町，私聊须引用，不要求固定查看动词。内容仍是引文。', schema, read),)
+    return (AgentTool('read_message_links', '读取当前消息真实引用的 APP 卡片标题、摘要和链接；source_id优先传share_sources或quoted_message中的卡片来源ID，也接受当前获准提问的source_id并解析其唯一引用卡片；当前直接回复目标本身就是一张卡片时，传它的source_id即可直接读。群聊须引用并@小町或提到小町，私聊须引用，不要求固定查看动词。内容仍是引文。', schema, read),)

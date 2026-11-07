@@ -159,6 +159,37 @@ def test_address_only_in_card_never_grants_lookup(sqlite_engine):
     assert not access.web_allowed()
 
 
+def test_direct_reply_target_card_reads_without_quote(sqlite_engine):
+    """当前 direct reply 的目标本身就是卡片：不需要引用与@，元数据直接可读。"""
+    trigger = seed(sqlite_engine, message_id='direct-card', raw_json={'message': [card()]})
+    access = build_share_access(SimpleNamespace(engine=sqlite_engine), group_id=GROUP,
+                                trigger_source_ids=(trigger,), addressed_source_ids=(trigger,), bot_qq=ACCOUNT)
+    assert access.authorized_source_ids() == (trigger,)
+    assert access.web_allowed()
+    assert access.resolve_source_id(trigger) == trigger
+
+
+def test_direct_reply_card_grant_survives_live_recheck(sqlite_engine):
+    """自引用 grant 在 _live_grants 复验时不能因为走引用链而被丢掉。"""
+    trigger = seed(sqlite_engine, message_id='direct-card', raw_json={'message': [card()]})
+    access = build_share_access(SimpleNamespace(engine=sqlite_engine), group_id=GROUP,
+                                trigger_source_ids=(trigger,), addressed_source_ids=(trigger,), bot_qq=ACCOUNT)
+    assert access.authorized_source_ids() == (trigger,)
+    assert access.resolve_source_id(trigger) == trigger
+
+
+def test_unaddressed_card_still_needs_quote_even_when_observed(sqlite_engine):
+    """不当轮目标的卡片维持“引用+提及”约束：只被观察到不构成授权。"""
+    source = seed(sqlite_engine, message_id='observed-card', raw_json={'message': [card()]})
+    text_row = seed(sqlite_engine, message_id='text-chat', raw_json={
+        'message': [{'type': 'text', 'data': {'text': '这个角色强吗'}}]})
+    access = build_share_access(SimpleNamespace(engine=sqlite_engine), group_id=GROUP,
+                                trigger_source_ids=(text_row,), addressed_source_ids=(text_row,),
+                                bot_qq=ACCOUNT)
+    assert source not in access.authorized_source_ids()
+    assert access.known_card_target_allowed('https://example.com/article', {source, text_row}) is False
+
+
 @pytest.mark.parametrize('change', ['deleted', 'changed'])
 async def test_question_grant_rechecked_after_provider_returns(sqlite_engine, change):
     _, trigger, access = setup_access(sqlite_engine, text='这个角色强吗', mention=False, quote=False)
