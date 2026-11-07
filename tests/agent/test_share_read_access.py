@@ -179,7 +179,7 @@ def test_direct_reply_card_grant_survives_live_recheck(sqlite_engine):
 
 
 def test_unaddressed_card_still_needs_quote_even_when_observed(sqlite_engine):
-    """不当轮目标的卡片维持“引用+提及”约束：只被观察到不构成授权。"""
+    """不当轮目标的卡片维持"引用+提及"约束：只被观察到不构成授权。"""
     source = seed(sqlite_engine, message_id='observed-card', raw_json={'message': [card()]})
     text_row = seed(sqlite_engine, message_id='text-chat', raw_json={
         'message': [{'type': 'text', 'data': {'text': '这个角色强吗'}}]})
@@ -188,6 +188,27 @@ def test_unaddressed_card_still_needs_quote_even_when_observed(sqlite_engine):
                                 bot_qq=ACCOUNT)
     assert source not in access.authorized_source_ids()
     assert access.known_card_target_allowed('https://example.com/article', {source, text_row}) is False
+
+
+def test_private_direct_card_reads_without_quote(sqlite_engine):
+    """私聊传输层天然选定收件人：裸卡片直接可读，无须引用与文字。"""
+    trigger = seed(sqlite_engine, message_id='private-card', raw_json={'message': [card()]})
+    with session_scope(sqlite_engine) as db:
+        db.get(Message, trigger).group_id = None
+        db.get(Message, trigger).platform_msg_id = f'private-inbound-{AUTHOR}-private-card'
+    access = build_share_access(SimpleNamespace(engine=sqlite_engine), group_id=None,
+                                trigger_source_ids=(trigger,), private_user_id=AUTHOR, bot_qq=ACCOUNT)
+    assert access.authorized_source_ids() == (trigger,)
+    assert access.web_allowed()
+    assert access.resolve_source_id(trigger) == trigger
+
+
+def test_private_wakeup_still_cannot_mint_card_grant(sqlite_engine):
+    """定时唤醒/后台任务没有当前消息：不给卡片授权，维持原约束。"""
+    trigger = seed(sqlite_engine, message_id='wakeup-card', raw_json={'message': [card()]})
+    access = build_share_access(SimpleNamespace(engine=sqlite_engine), group_id=None,
+                                trigger_source_ids=(), private_user_id=AUTHOR, bot_qq=ACCOUNT)
+    assert access.authorized_source_ids() == () and not access.web_allowed()
 
 
 @pytest.mark.parametrize('change', ['deleted', 'changed'])

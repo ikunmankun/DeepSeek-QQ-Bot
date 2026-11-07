@@ -143,11 +143,12 @@ class ShareReadAccess:
                         # hard stop above.
                         if self._mentioned(raw, row):
                             self._grants.append(_ShareGrant(row.id, quoted.id, _fingerprint(row), _fingerprint(quoted)))
-                    elif _app_links(raw) and row.id in addressed:
+                    elif _app_links(raw) and (row.id in addressed or self.private_user_id is not None):
                         # 本机补丁：当前 direct reply 的目标本身就是一张卡片
-                        # （主人直接甩卡片、不引用不@）。路由已把这条消息定为
-                        # 本轮交互对象，卡片元数据应可读；不当轮目标的卡片仍走
-                        # 上面的“引用+提及”路径。
+                        # （主人直接甩卡片、不引用不@）。群聊里路由已把这条消息
+                        # 定为本轮交互对象；私聊里传输层天然选定收件人，且
+                        # _usable 已确认作者是本人。卡片元数据应可读；不当轮
+                        # 目标的卡片仍走上面的”引用+提及”路径。
                         self._grants.append(_ShareGrant(row.id, row.id, _fingerprint(row), _fingerprint(row)))
                     elif (not _app_links(raw) and not _SHARE_REFERENCE.search(text)
                             and (row.id in addressed or self._mentioned(raw, row, private=False)
