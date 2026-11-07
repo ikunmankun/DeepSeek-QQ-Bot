@@ -334,6 +334,7 @@ def detect_address_intent(
     bot_recently_participated: bool,
     recent_bot_message_count: int,
     other_addressee: bool = False,
+    allow_ongoing_exchange: bool = False,
 ) -> AddressDecision:
     normalized = text.strip()
     from app.core.message_mentions import calls_bot_by_name
@@ -350,6 +351,11 @@ def detect_address_intent(
         return AddressDecision(True, "quoted_bot", 8)
     if bot_recently_participated and any(phrase in normalized for phrase in FOLLOWUP_PHRASES):
         return AddressDecision(True, "recent_followup", 7)
+    # 本机补丁：来回对话时不要求每句都 @。它刚在最近 3 条里说过话，而且这条
+    # 不是在跟别人说话，就当成本轮继续聊。原来的判定只认 FOLLOWUP_PHRASES
+    # 那 4 句固定说法，"没事就不能喊你了吗"这种自然接话永远命中不了。
+    if allow_ongoing_exchange and not other_addressee and recent_bot_message_count > 0:
+        return AddressDecision(True, "ongoing_exchange", 5)
     if recent_bot_message_count > 0 and any(phrase in normalized for phrase in TAKE_REQUEST_PHRASES):
         return AddressDecision(True, "take_request", 6)
     return AddressDecision(False, "not_addressed", 0)

@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 import logging
 import mimetypes
+import os
 from pathlib import Path
 import re
 import time
@@ -126,6 +127,24 @@ class LlmClient:
     IMAGE_DOWNLOAD_MAX_ATTEMPTS = 3
     supports_forced_web_search = True
     supports_selective_web_search = True
+
+    @property
+    def supports_forced_tool_choice(self) -> bool:
+        """Whether this provider accepts a forced ``tool_choice``.
+
+        DeepSeek's thinking models reject anything other than ``none``/``auto``
+        with HTTP 400 ("Thinking mode does not support this tool_choice"), so
+        sending ``required`` or a named function turns the delivery-recovery
+        retry into a hard request failure. Override with the environment
+        variable ``LLM_FORCED_TOOL_CHOICE=1`` (force on) or ``=0`` (force off).
+        """
+        override = os.environ.get("LLM_FORCED_TOOL_CHOICE", "").strip().lower()
+        if override in {"1", "true", "yes", "on"}:
+            return True
+        if override in {"0", "false", "no", "off"}:
+            return False
+        haystack = f"{self.base_url} {self.model} {self.fallback_model or ''}".lower()
+        return "deepseek" not in haystack
 
     def __init__(
         self,

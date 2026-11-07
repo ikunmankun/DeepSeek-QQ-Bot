@@ -19,6 +19,17 @@ def _uses_wyzlab_alpha_search(settings: AppSettings) -> bool:
 
 
 def build_web_search_client(settings: AppSettings) -> WebSearchClient | None:
+    if getattr(settings, "search_provider", "").strip().lower() == "deepseek":
+        # 本机补丁：DeepSeek 思考模型在 responses 接口下会忽略内置 web_search，
+        # 改用官方独立 Search API（Bearer 鉴权），复用同一个 LLM key。
+        return _with_page_reader(WebSearchClient(
+            provider="deepseek",
+            base_url=settings.llm_base_url,
+            api_key=settings.llm_api_key,
+            timeout_seconds=settings.search_timeout_seconds,
+            region=settings.search_region,
+            backend=settings.search_backend,
+        ), settings)
     if getattr(settings, "search_provider", "").strip().lower() == "gemini":
         return _build_gemini_search_client(settings)
     if _uses_wyzlab_alpha_search(settings):

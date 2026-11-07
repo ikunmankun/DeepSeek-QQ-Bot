@@ -22,7 +22,7 @@ def test_memory_tool_schemas_expose_three_strict_functions() -> None:
         assert schema["type"] == "function"
         assert schema["parameters"]["additionalProperties"] is False
     search_params = schemas[0]["parameters"]["properties"]
-    assert search_params["layer"]["enum"] == ["all", "facts", "raw", "summaries"]
+    assert search_params["layer"]["enum"] == ["all", "facts", "life", "raw", "summaries"]
     assert search_params["limit"]["maximum"] == 20
     write_params = schemas[2]["parameters"]
     assert set(write_params["required"]) == {
@@ -43,7 +43,7 @@ def test_memory_tool_schemas_expose_three_strict_functions() -> None:
     ("arguments", "error"),
     [
         ({"query": ""}, "query must be a non-empty string"),
-        ({"query": "x", "layer": "magic"}, "layer must be one of raw, facts, summaries, all"),
+        ({"query": "x", "layer": "magic"}, "layer must be one of raw, facts, summaries, life, all"),
         ({"query": "x", "limit": 0}, "limit must be between 1 and 20"),
         ({"query": "x", "limit": "5"}, "limit must be an integer"),
         ({"query": "x", "member": 42}, "member must be a string"),

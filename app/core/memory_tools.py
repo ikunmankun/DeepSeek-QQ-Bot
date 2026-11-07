@@ -8,7 +8,7 @@ from typing import Any
 MEMORY_TOOL_KINDS = frozenset(
     {"fact", "preference", "taboo", "plan", "decision", "profile", "relationship"}
 )
-MEMORY_TOOL_LAYERS = frozenset({"raw", "facts", "summaries", "all"})
+MEMORY_TOOL_LAYERS = frozenset({"raw", "facts", "summaries", "all", "life"})
 MEMORY_TOOL_CONTENT_LIMIT = 400
 MEMORY_TOOL_LIMIT_MIN = 1
 MEMORY_TOOL_LIMIT_MAX = 20
@@ -137,7 +137,7 @@ def validate_memory_search_args(arguments: dict[str, Any]) -> str | None:
         return "query must be a non-empty string"
     layer = str(arguments.get("layer") or "all").strip()
     if layer not in MEMORY_TOOL_LAYERS:
-        return "layer must be one of raw, facts, summaries, all"
+        return "layer must be one of raw, facts, summaries, life, all"
     limit = arguments.get("limit", MEMORY_TOOL_LIMIT_MAX)
     if not isinstance(limit, int) or isinstance(limit, bool):
         return "limit must be an integer"

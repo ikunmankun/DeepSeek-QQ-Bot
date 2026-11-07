@@ -401,6 +401,7 @@ async def run() -> None:
     persona_sync_task = None
     persona_task_worker = None
     member_fact_refresh_task = None
+    plugin_registry = None
     persona_prewarm_task = None
     group_agent = None
     participation_planner = None
@@ -531,6 +532,95 @@ async def run() -> None:
         member_fact_refresh_task = asyncio.create_task(
             member_fact_refresh_service.run()
         )
+        # 插件注册表（Phase 3）：表情包 / 日记 / 情绪 / 记忆衰减从这里装配，
+        # router 与 agent 执行器只跟注册表对话。
+        from app.agent.plugins.base import FeatureRegistry
+        from app.agent.plugins.affinity import AffinityFeature
+        from app.agent.plugins.builtin import (
+            DiaryFeature,
+            MemoryDecayFeature,
+            MoodFeature,
+            SlangFeature,
+            SlangFeature,
+            StickerFeature,
+            StickerLearningFeature,
+        )
+        from app.agent.plugins.agent_self import AgentSelfFeature
+        from app.agent.plugins.bilibili import BilibiliFeature
+        from app.agent.plugins.bili_browser import BilibiliBrowserFeature
+        from app.agent.plugins.interactions import PokeFeature, WelcomeFeature
+        from app.agent.plugins.summary import ChatSummaryFeature
+        from app.agent.plugins.voice import VoiceFeature
+        from app.agent.plugins.web_hands import WebHandsFeature
+        from app.agent.plugins.trait_evolution import TraitEvolutionFeature
+        from app.agent.plugins.social_learning import SilenceLearningFeature
+        from app.agent.plugins.reminders import ReminderFeature
+
+        bilibili_feature = BilibiliFeature()
+        bilibili_feature.attach_engine(engine)
+        mood_feature = MoodFeature()
+        mood_feature.attach_engine(engine)
+        affinity_feature = AffinityFeature()
+        affinity_feature.attach_engine(engine)
+        diary_feature = DiaryFeature()
+        memory_decay_feature = MemoryDecayFeature()
+        memory_decay_feature.attach(engine=engine, settings=settings)
+        sticker_learning_feature = StickerLearningFeature()
+        sticker_learning_feature.attach(engine=engine, settings=settings)
+        slang_feature = SlangFeature()
+        slang_feature.attach(engine=engine, settings=settings, group_ids=memory_group_ids)
+        bili_browser_feature = BilibiliBrowserFeature()
+        bili_browser_feature.attach(settings=settings, sender=sender,
+            llm_client=llm_client, persona_text=str(runtime.persona.get("identity", "") or ""))
+        web_hands_feature = WebHandsFeature()
+        web_hands_feature.attach(settings=settings,
+            persona_text=str(runtime.persona.get("identity", "") or ""))
+        voice_feature = VoiceFeature()
+        voice_feature.attach(settings=settings)
+        trait_evolution_feature = TraitEvolutionFeature()
+        trait_evolution_feature.attach(
+            engine=engine,
+            settings=settings,
+            bot_name=str(runtime.persona.get("name", settings.bot_qq)),
+        )
+        silence_learning_feature = SilenceLearningFeature()
+        silence_learning_feature.attach(engine=engine, settings=settings)
+        reminder_feature = ReminderFeature()
+        reminder_feature.attach(engine=engine, sender=sender)
+        diary_feature.attach(engine=engine, settings=settings, llm_client=llm_client,
+            group_ids=memory_group_ids,
+            persona_text=str(runtime.persona.get("identity", "") or ""),
+            bot_qq=settings.bot_qq)
+        agent_self_feature = AgentSelfFeature()
+        agent_self_feature.attach(engine=engine, llm_client=llm_client,
+            persona_text=str(runtime.persona.get("identity", "") or ""),
+            bot_qq=settings.bot_qq,
+            reflect_hook=diary_feature._service._reflect_hook if False else None,
+            settings=settings, data_dir=settings.data_dir)
+        plugin_registry = FeatureRegistry([
+            StickerFeature(),
+            diary_feature,
+            mood_feature,
+            affinity_feature,
+            memory_decay_feature,
+            sticker_learning_feature,
+            slang_feature,
+            bilibili_feature,
+            trait_evolution_feature,
+            silence_learning_feature,
+            reminder_feature,
+            PokeFeature(),
+            WelcomeFeature(),
+            ChatSummaryFeature(),
+            web_hands_feature,
+            voice_feature,
+        ])
+        plugin_worker_tasks = await plugin_registry.start_workers()
+        # 夜间反思后的钩子链：日记写完 → 议程生成 → 愿望提取（私信主人）
+        # → 人生笔记凝练（自传体长期记忆）
+        diary_feature.add_reflection_hook(agent_self_feature._nightly_agenda)
+        diary_feature.add_reflection_hook(agent_self_feature._nightly_wishes)
+        diary_feature.add_reflection_hook(agent_self_feature._nightly_life_notes)
         router = InboundRouter(
             engine=engine,
             runtime=runtime,
@@ -546,6 +636,7 @@ async def run() -> None:
             memory_orchestrator=memory_runtime.memory_orchestrator,
             persona_manager=persona_manager,
             persona_switch_service=persona_switch_service,
+            plugin_registry=plugin_registry,
         )
         if hasattr(group_image_service, "group_source_validator"):
             observation = GroupObservationService(router)
@@ -634,6 +725,16 @@ async def run() -> None:
 
         async def handle_payload(payload: dict) -> None:
             if await _handle_group_recall_payload(payload, engine=engine):
+                return
+            if payload.get("post_type") == "notice":
+                # 戳一戳 / 进群等 notice 事件：分发给插件（Poke/Welcome）。
+                from app.agent.plugins.base import NoticeContext
+                from app.core.time_utils import ASIA_SHANGHAI
+
+                if plugin_registry is not None:
+                    plugin_registry.dispatch_notice(NoticeContext(
+                        router=router, payload=payload,
+                        now=datetime.now(ASIA_SHANGHAI)))
                 return
             if payload.get("post_type") != "message":
                 return
@@ -749,6 +850,8 @@ async def run() -> None:
         service_tasks = [task for task in (member_fact_refresh_task, persona_prewarm_task, persona_sync_task) if task is not None]
         if service_tasks:
             await asyncio.gather(*service_tasks, return_exceptions=True)
+        if plugin_registry is not None:
+            await plugin_registry.stop_workers()
         if group_image_service is not None and hasattr(group_image_service, "stop") and getattr(group_image_service, "engine", None) is not None:
             await group_image_service.stop()
         if memory_compaction_service is not None:

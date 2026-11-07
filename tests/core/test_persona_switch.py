@@ -75,6 +75,29 @@ def test_parse_switch_command_ignores_non_commands_and_unknown_targets() -> None
     assert parse_switch_command("切换人格为", personas) is None
 
 
+def test_parse_switch_command_accepts_modern_variants() -> None:
+    personas = _personas()
+    # 2026-10-31 放宽：人格/人设都认，切换/换/变都行，冒号、空格都能隔开；
+    # "默认/原版/原来的"切回 default。
+    assert parse_switch_command("切换人设为:测试君", personas) == "test_self"
+    assert parse_switch_command("切换人设为 测试君", personas) == "test_self"
+    assert parse_switch_command("换个人设 嘴臭小町", personas) == "mouthy_komachi"
+    assert parse_switch_command("变人格成 粘人小町", personas) == "default"
+    assert parse_switch_command("切换人设为默认", personas) == "default"
+    assert parse_switch_command("换人设 原来的", personas) == "default"
+
+
+def test_match_switch_command_detects_intent_without_target() -> None:
+    from app.core.persona_switch import match_switch_command
+
+    # 是切换指令但没说切谁：返回空串（router 回可用人设清单），不是 None。
+    assert match_switch_command("切换人设") == ""
+    assert match_switch_command("换个人设") == ""
+    assert match_switch_command("切换人设为 粘人小町") == "粘人小町"
+    assert match_switch_command("你好") is None
+    assert match_switch_command("你怎么不切换人格") is None
+
+
 def test_persona_aliases_include_short_cjk_suffix() -> None:
     assert "小町" in persona_aliases({"name": "测试小町"})
 

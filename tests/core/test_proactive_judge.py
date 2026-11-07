@@ -129,3 +129,36 @@ def test_judge_passes_images_to_client() -> None:
     assert result.should_interject is False
     assert client.seen_images is not None
     assert len(client.seen_images) == 1
+
+
+def test_prompt_includes_context_hints_when_given() -> None:
+    now = datetime(2026, 5, 8, 12, 0, tzinfo=UTC)
+    lines = build_proactive_judge_prompt(
+        bot_name="小町",
+        target_message="t",
+        recent_messages=["A: 嗨"],
+        now=now,
+        mood_hint="你现在正恼火。默认不要插话。",
+        relation_hint="正在说话的人和你关系：老朋友。",
+        history_hint="你最近14天主动插话 9 次：2 次有人接。",
+    )
+    joined = "\n".join(lines)
+    assert "Context: 你现在正恼火" in joined
+    assert "Context: 正在说话的人和你关系" in joined
+    assert "Context: 你最近14天主动插话" in joined
+    # hint 出现在消息列表之前，先给语境再看内容
+    assert joined.index("Context:") < joined.index("Recent messages:")
+
+
+def test_prompt_omits_context_lines_when_hints_missing() -> None:
+    now = datetime(2026, 5, 8, 12, 0, tzinfo=UTC)
+    lines = build_proactive_judge_prompt(
+        bot_name="小町",
+        target_message="t",
+        recent_messages=["A: 嗨"],
+        now=now,
+        mood_hint=None,
+        relation_hint="  ",
+        history_hint=None,
+    )
+    assert not any("Context:" in line for line in lines)

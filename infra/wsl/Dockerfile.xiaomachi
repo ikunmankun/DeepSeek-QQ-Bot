@@ -3,7 +3,7 @@ ARG HTTPS_PROXY
 ARG HTTP_PROXY
 ENV GOPROXY=https://goproxy.cn,direct GOSUMDB=sum.golang.google.cn
 WORKDIR /src
-RUN curl -fSL --connect-timeout 8 --max-time 80 -o source.tgz \
+RUN curl -fSL --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 15 --max-time 900 -o source.tgz \
       https://codeload.github.com/xpzouying/xiaohongshu-mcp/tar.gz/7797fd375aba02dcd33afe143f6bee13e5870859 \
     && tar xzf source.tgz --strip-components=1 && rm source.tgz
 COPY infra/wsl/xhs-crawler/main.go ./cmd/xiaomachi-readonly/main.go
@@ -46,7 +46,9 @@ RUN apt-get update \
 
 # Browser and crawler are image dependencies. No runtime download, host daemon,
 # open MCP port, or account write tool is needed for XHS collection.
-RUN python -c "import urllib.request,zipfile,io,os; b=urllib.request.urlopen('https://storage.googleapis.com/chrome-for-testing-public/155.0.8059.84/linux64/chrome-linux64.zip',timeout=120).read(); zipfile.ZipFile(io.BytesIO(b)).extractall('/opt/xhs'); os.rename('/opt/xhs/chrome-linux64','/opt/xhs/chrome')" \
+# 本机补丁：原地址 storage.googleapis.com 在国内基本不可达（该步骤曾连续卡住 33 分钟）。
+# 改用 npmmirror 的 chrome-for-testing 二进制镜像，版本与文件完全一致（199MB zip）。
+RUN python -c "import urllib.request,zipfile,io,os; b=urllib.request.urlopen('https://cdn.npmmirror.com/binaries/chrome-for-testing/155.0.8059.84/linux64/chrome-linux64.zip',timeout=300).read(); zipfile.ZipFile(io.BytesIO(b)).extractall('/opt/xhs'); os.rename('/opt/xhs/chrome-linux64','/opt/xhs/chrome')" \
     && chmod +x /opt/xhs/chrome/chrome /opt/xhs/chrome/chrome_crashpad_handler
 COPY --from=xhs-builder /out/xhs-readonly /usr/local/bin/xhs-readonly
 COPY --from=xhs-builder /src/LICENSE /opt/xhs/UPSTREAM-LICENSE

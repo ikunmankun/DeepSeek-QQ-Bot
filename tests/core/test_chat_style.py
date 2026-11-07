@@ -13,6 +13,7 @@ from app.core.chat_style import (
     retrieve_relevant_facts,
     scrub_banned_address_terms,
     split_burst_reply,
+    typing_delay_seconds,
 )
 
 
@@ -402,3 +403,34 @@ def test_tieba_proactive_voice_is_short_and_does_not_dogpile() -> None:
     assert "playful串场" in joined
     assert "do not bait, dogpile, shame" in joined
     assert "sharp roast" not in joined
+
+
+def test_typing_delay_disabled_by_default_and_when_unset() -> None:
+    settings = SimpleNamespace()
+
+    assert typing_delay_seconds(settings, "随便说说") == 0.0
+    assert typing_delay_seconds(None, "随便说说") == 0.0
+
+
+def test_typing_delay_scales_with_length_and_caps() -> None:
+    class Rng:
+        def __init__(self, value):
+            self.value = value
+
+        def uniform(self, low, high):
+            assert low <= high
+            return self.value
+
+    settings = SimpleNamespace(group_reply_typing_base_seconds=2.0,
+        group_reply_typing_base_max_seconds=5.0, group_reply_typing_per_char_seconds=0.12,
+        group_reply_typing_max_seconds=14.0)
+    short = typing_delay_seconds(settings, "嗯", rng=Rng(3.0))
+    assert short == 3.0 + 0.12
+    long = typing_delay_seconds(settings, "字" * 400, rng=Rng(5.0))
+    # 300 字封顶 + cap：5 + 0.12*300 = 41 → 14
+    assert long == 14.0
+
+    zeroed = SimpleNamespace(group_reply_typing_base_seconds=0.0,
+        group_reply_typing_base_max_seconds=0.0, group_reply_typing_per_char_seconds=0.0,
+        group_reply_typing_max_seconds=14.0)
+    assert typing_delay_seconds(zeroed, "字" * 100) == 0.0

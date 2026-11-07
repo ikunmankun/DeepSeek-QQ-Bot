@@ -164,6 +164,50 @@ def test_parse_group_message_event_extracts_reply_to_msg_id() -> None:
     assert event.reply_to_msg_id == "765262399"
 
 
+def test_parse_group_message_event_renders_qq_faces_instead_of_dropping_them() -> None:
+    # QQ 自带表情只带一个数字 id，以前被整段丢掉，模型看到的 plain_text 是空串。
+    payload = {
+        "post_type": "message",
+        "message_type": "group",
+        "sub_type": "normal",
+        "message_id": 49,
+        "group_id": 10001,
+        "user_id": 20006,
+        "raw_message": "[CQ:face,id=14]",
+        "message": [{"type": "face", "data": {"id": "14"}}],
+        "sender": {"nickname": "Frank", "card": ""},
+        "time": 1715150007,
+    }
+
+    event = parse_group_message_event(payload, bot_qq=123456789, bot_name="Mira")
+
+    assert event.plain_text == "[表情：微笑]"
+    assert event.msg_type == "text"
+    assert event.images == []
+
+
+def test_parse_group_message_event_keeps_text_and_market_face_together() -> None:
+    payload = {
+        "post_type": "message",
+        "message_type": "group",
+        "sub_type": "normal",
+        "message_id": 50,
+        "group_id": 10001,
+        "user_id": 20007,
+        "raw_message": "笑死[CQ:mface,summary=[笑哭]]",
+        "message": [
+            {"type": "text", "data": {"text": "笑死"}},
+            {"type": "mface", "data": {"summary": "[笑哭]", "emoji_id": "e1"}},
+        ],
+        "sender": {"nickname": "Gina", "card": ""},
+        "time": 1715150008,
+    }
+
+    event = parse_group_message_event(payload, bot_qq=123456789, bot_name="Mira")
+
+    assert event.plain_text == "笑死[表情包：笑哭]"
+
+
 def test_parse_private_message_event_extracts_plain_text() -> None:
     payload = {
         "post_type": "message",

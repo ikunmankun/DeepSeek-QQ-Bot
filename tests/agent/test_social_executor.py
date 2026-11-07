@@ -109,6 +109,41 @@ async def test_direct_group_long_answer_is_whole_and_autonomous_caption_keeps_it
 
 
 @pytest.mark.asyncio
+async def test_chat_length_reply_bursts_as_short_messages_with_random_delays(sqlite_engine, monkeypatch):
+    router, observation = group_setup(sqlite_engine)
+    sender = Sender()
+    executor = SocialExecutor(router=router, sender=sender, qzone_adapter=None)
+    sleeps = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("app.agent.social_executor.asyncio.sleep", fake_sleep)
+    # 五个 16 字短句共 80 字，超过 64 字拆段线但远低于报告线。
+    reply = "今天试了下那个新功能，感觉还行。" * 5
+    result = await executor._send_group(observation, SocialDecision('send_group', reply), Guard())
+    assert result.status == "sent"
+    assert len(sender.calls) >= 2
+    assert "".join(call.text for call in sender.calls) == reply
+    assert len(sleeps) == len(sender.calls) - 1
+    assert all(0.8 <= seconds <= 2.5 for seconds in sleeps)
+
+
+@pytest.mark.asyncio
+async def test_unstructured_wall_of_text_stays_one_message(sqlite_engine):
+    router, observation = group_setup(sqlite_engine)
+    sender = Sender()
+    executor = SocialExecutor(router=router, sender=sender, qzone_adapter=None)
+    # 无换行的成句长文是报告而非聊天：拆段后仍有超长尾巴，必须整发。
+    reply = "这一段讲的是第一部分的内容，涉及若干细节。" * 40
+    result = await executor._send_group(observation, SocialDecision('send_group', reply), Guard(),
+                                        max_text_chars=12000)
+    assert result.status == "sent"
+    assert len(sender.calls) == 1
+    assert sender.calls[0].text == reply
+
+
+@pytest.mark.asyncio
 async def test_uncertain_group_send_retains_ineligible_provisional_record(sqlite_engine):
     router, observation = group_setup(sqlite_engine)
     sender = Sender(QQMessageDeliveryUncertainError("unknown"))

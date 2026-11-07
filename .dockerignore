@@ -25,3 +25,5 @@ tmp*
 *.db
 *.sqlite
 *.sqlite3
+# 表情库走 compose 卷挂载（/workspace/memes:ro），不需要进镜像层
+memes/

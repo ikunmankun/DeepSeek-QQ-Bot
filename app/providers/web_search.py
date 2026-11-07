@@ -222,6 +222,8 @@ class WebSearchClient:
     def search(self, query: str, max_results: int = 3) -> list[WebSearchResult]:
         if self.provider == "ddgs":
             return self._search_ddgs(query=query, max_results=max_results)
+        if self.provider == "deepseek":
+            return self._search_deepseek(query=query, max_results=max_results)
         if self.provider in {"wyzlab", "wyzlab_alpha"}:
             return self._search_wyzlab_alpha(query=query, max_results=max_results)
         return self._search_tavily(query=query, max_results=max_results)
@@ -266,6 +268,40 @@ class WebSearchClient:
 
         ranked = sorted(candidates, key=lambda candidate: (-candidate.score, candidate.index))
         return [candidate.page for candidate in ranked[:max_pages]]
+
+    def _search_deepseek(self, *, query: str, max_results: int) -> list[WebSearchResult]:
+        """DeepSeek 官方 Search API（Bearer 鉴权，非 tavily 的 body 传 key）。
+
+        DeepSeek 的思考模型在 responses 接口下会忽略内置 web_search 工具，
+        只能走这个独立端点，因此单独实现一个 provider。
+        """
+        if not self.api_key.strip():
+            return []
+        base = self.base_url.rstrip("/")
+        endpoint = base + ("/tools/search" if base.endswith("/v1") else "/v1/tools/search")
+        response = self.http_client.post(
+            endpoint,
+            headers={"Authorization": "Bearer " + self.api_key},
+            json={"query": query, "count": max_results},
+        )
+        response.raise_for_status()
+        payload: dict[str, Any] = response.json()
+        rows = payload.get("results")
+        if not isinstance(rows, list):
+            return []
+        results: list[WebSearchResult] = []
+        for item in rows[:max_results]:
+            if not isinstance(item, dict):
+                continue
+            results.append(
+                WebSearchResult(
+                    title=str(item.get("title", "")).strip(),
+                    snippet=str(item.get("summary", "")).strip(),
+                    source=str(item.get("url", "")).strip(),
+                    date=str(item.get("date", "")).strip(),
+                )
+            )
+        return results
 
     def _search_tavily(self, *, query: str, max_results: int) -> list[WebSearchResult]:
         if not self.api_key.strip():

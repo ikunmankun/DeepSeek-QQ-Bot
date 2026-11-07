@@ -34,8 +34,10 @@ from app.core.memory_source_guard import is_usable_memory_source
 logger = logging.getLogger(__name__)
 
 AUTO_IMAGE_SIZE = "auto"
-LANDSCAPE_IMAGE_SIZE = "1536x1024"
-PORTRAIT_IMAGE_SIZE = "1024x1536"
+# 本机补丁：原值 1536x1024 / 1024x1536 面向 SDXL/GPT-Image；本地 SD1.5 在超过
+# 768 长边时容易出现双头、重复构图，因此改为 SD1.5 训练分辨率附近的档位。
+LANDSCAPE_IMAGE_SIZE = "768x512"
+PORTRAIT_IMAGE_SIZE = "512x768"
 LANDSCAPE_IMAGE_SIZE_KEYWORDS = ("横图", "横版")
 PORTRAIT_IMAGE_SIZE_KEYWORDS = ("竖图", "竖版")
 

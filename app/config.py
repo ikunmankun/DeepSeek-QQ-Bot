@@ -22,6 +22,28 @@ class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     group_agent_enabled: bool = Field(default=True, alias="GROUP_AGENT_ENABLED")
+    # Directory of locally hosted sticker/meme images. Non-empty enables the
+    # pick_sticker tool in group chats; empty keeps the tool absent.
+    local_sticker_dir: str = Field(default="", alias="LOCAL_STICKER_DIR")
+    # 每日日记反思：每晚固定时刻自动写一篇（关掉则只靠观察轮随手写）。
+    diary_reflection_enabled: bool = Field(default=True, alias="DIARY_REFLECTION_ENABLED")
+    diary_reflection_time: str = Field(default="23:30", alias="DIARY_REFLECTION_TIME")
+    # B站浏览器自主刷视频（playwright 驱动 /opt/xhs/chrome）。
+    bili_browser_enabled: bool = Field(default=True, alias="BILI_BROWSER_ENABLED")
+    bili_browser_windows: str = Field(default="12:00", alias="BILI_BROWSER_WINDOWS")
+    bili_browser_interests: str = Field(default="动画,游戏,科技,教程", alias="BILI_BROWSER_INTERESTS")
+    bili_browser_max_stay_seconds: int = Field(default=480, alias="BILI_BROWSER_MAX_STAY_SECONDS")
+    bili_chrome_path: str = Field(default="/opt/xhs/chrome/chrome", alias="BILI_CHROME_PATH")
+    # 语音（TTS）：TTS_API_KEY 为空时功能整体隐藏。provider 支持 mimo/fishaudio/minimax。
+    tts_api_key: str = Field(default="", alias="TTS_API_KEY")
+    tts_provider: str = Field(default="mimo", alias="TTS_PROVIDER")
+    tts_api_url: str = Field(default="https://api.xiaomimimo.com", alias="TTS_API_URL")
+    tts_voice: str = Field(default="mimo_default", alias="TTS_VOICE")
+    tts_style: str = Field(default="活泼俏皮的少女语气，语速稍快", alias="TTS_STYLE")
+    tts_daily_limit: int = Field(default=20, alias="TTS_DAILY_LIMIT")
+    tts_group_id: str = Field(default="", alias="TTS_GROUP_ID")      # MiniMax 必需
+    tts_model: str = Field(default="mimo-v2.5-tts", alias="TTS_MODEL")
+    tts_speed: float = Field(default=1.0, alias="TTS_SPEED")         # >1 更快更活泼  # MiniMax 音色模型
     agent_runtime: Literal["harness", "legacy"] = Field(default="harness", alias="AGENT_RUNTIME")
     agent_responses_continuation: Literal["off", "auto", "on"] = Field(default="auto", alias="AGENT_RESPONSES_CONTINUATION")
     agent_max_external_writes: int = Field(default=2, ge=1, le=8, alias="AGENT_MAX_EXTERNAL_WRITES")
@@ -168,6 +190,58 @@ class AppSettings(BaseSettings):
         default=2.5,
         ge=0.0,
         alias="GROUP_REPLY_SPLIT_MAX_DELAY_SECONDS",
+    )
+    # 拟人打字延迟：回复发出前的"阅读+打字"停顿（默认 0 = 关闭，测试基线不变）。
+    # 全 0 时无延迟；启用后 = uniform(base, base_max) + per_char × 文本长度，
+    # 再截到 max。只作用于纯文字群回复的第一段，段间节奏仍由 split delay 管。
+    group_reply_typing_base_seconds: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=30.0,
+        alias="GROUP_REPLY_TYPING_BASE_SECONDS",
+    )
+    group_reply_typing_base_max_seconds: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=30.0,
+        alias="GROUP_REPLY_TYPING_BASE_MAX_SECONDS",
+    )
+    group_reply_typing_per_char_seconds: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        alias="GROUP_REPLY_TYPING_PER_CHAR_SECONDS",
+    )
+    group_reply_typing_max_seconds: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=60.0,
+        alias="GROUP_REPLY_TYPING_MAX_SECONDS",
+    )
+    # 私聊同款打字延迟：DM 期望比群聊快一点，默认参数也小一号。
+    private_reply_typing_base_seconds: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=30.0,
+        alias="PRIVATE_REPLY_TYPING_BASE_SECONDS",
+    )
+    private_reply_typing_base_max_seconds: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=30.0,
+        alias="PRIVATE_REPLY_TYPING_BASE_MAX_SECONDS",
+    )
+    private_reply_typing_per_char_seconds: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        alias="PRIVATE_REPLY_TYPING_PER_CHAR_SECONDS",
+    )
+    private_reply_typing_max_seconds: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=60.0,
+        alias="PRIVATE_REPLY_TYPING_MAX_SECONDS",
     )
     memory_compaction_enabled: bool = Field(default=True, alias="MEMORY_COMPACTION_ENABLED")
     memory_compaction_batch_size: int = Field(default=50, alias="MEMORY_COMPACTION_BATCH_SIZE")
@@ -378,6 +452,65 @@ class AppSettings(BaseSettings):
         le=10,
         alias="PROACTIVE_IMAGE_MAX_COUNT",
     )
+    style_judge_enabled: bool = Field(
+        default=True,
+        alias="STYLE_JUDGE_ENABLED",
+    )
+    style_judge_sample_rate: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=1.0,
+        alias="STYLE_JUDGE_SAMPLE_RATE",
+    )
+    silence_learning_enabled: bool = Field(
+        default=True,
+        alias="SILENCE_LEARNING_ENABLED",
+    )
+    # 人生笔记（自传体长期记忆）：夜间凝练节奏与存量软上限。
+    life_note_enabled: bool = Field(
+        default=True,
+        alias="LIFE_NOTE_ENABLED",
+    )
+    life_note_min_interval_days: int = Field(
+        default=3,
+        ge=1,
+        le=30,
+        alias="LIFE_NOTE_MIN_INTERVAL_DAYS",
+    )
+    life_note_max_count: int = Field(
+        default=200,
+        ge=10,
+        le=2000,
+        alias="LIFE_NOTE_MAX_COUNT",
+    )
+    # 功能愿望私信主人：夜间提炼新愿望后每天最多一条私聊，安静时段顺延。
+    owner_wish_notice_enabled: bool = Field(
+        default=True,
+        alias="OWNER_WISH_NOTICE_ENABLED",
+    )
+    owner_wish_notice_voice_probability: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        alias="OWNER_WISH_NOTICE_VOICE_PROBABILITY",
+    )
+    owner_wish_notice_max_voice_daily: int = Field(
+        default=2,
+        ge=0,
+        le=20,
+        alias="OWNER_WISH_NOTICE_MAX_VOICE_DAILY",
+    )
+    # 事实向量候选通道：query embedding 对群内真向量暴力余弦补候选的条数。
+    memory_vector_candidate_limit: int = Field(
+        default=10,
+        ge=0,
+        le=50,
+        alias="MEMORY_VECTOR_CANDIDATE_LIMIT",
+    )
+    trait_evolution_enabled: bool = Field(
+        default=True,
+        alias="TRAIT_EVOLUTION_ENABLED",
+    )
     memory_memory_tool_max_rounds: int = Field(
         default=2,
         ge=1,
@@ -534,7 +667,10 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 def load_runtime_config(settings: AppSettings) -> RuntimeConfig:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.log_dir.mkdir(parents=True, exist_ok=True)
-    persona = _read_yaml(settings.config_dir / "persona.yaml")
+    from app.core.persona_engine import normalize_persona
+    # 本机补丁：允许 voice/backstory/rules/style/examples/avoid 这套结构化写法，
+    # 在入口统一映射成渲染器认识的字段名，下游（路由、社交、质量门）无需感知。
+    persona = normalize_persona(_read_yaml(settings.config_dir / "persona.yaml"))
     personas: dict[str, dict[str, Any]] = {"default": dict(persona)}
     persona_variants_path = settings.config_dir / "persona_variants.yaml"
     if persona_variants_path.exists():

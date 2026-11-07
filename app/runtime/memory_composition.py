@@ -60,7 +60,7 @@ from app.storage.db import (
     find_active_retrieval_vector_generation,
 )
 from app.storage.db import session_scope
-from app.storage.models import Message
+from app.storage.models import MemoryItem, Message
 from app.storage.repositories import (
     EpisodeRepository,
     MemoryRepository,
@@ -292,6 +292,63 @@ def build_memory_compaction_service(
         shadow_enabled=settings.memory_orchestration_shadow_mode,
         legacy_enabled=background_service is None,
     )
+
+
+#: 向量候选通道的最低相似度（bge-small-zh 余弦；低于此值视为不相关）。
+_SEMANTIC_CANDIDATE_MIN_COSINE = 0.45
+
+
+def _semantic_vector_candidates(session, memories, embedding_provider, *,
+                                group_id: int, query: str,
+                                exclude_ids: set[int], limit: int) -> list:
+    """用 query embedding 对该群全部真向量暴力余弦，补语义候选（FTS 漏的）。"""
+
+    try:
+        vector = embedding_provider.embed_query(str(query or ""))
+        if not vector:
+            return []
+        identity = embedding_provider.identity
+        ids = list(session.scalars(
+            select(MemoryItem.id).where(
+                MemoryItem.scope_type == "group",
+                MemoryItem.scope_id == str(group_id),
+                MemoryItem.status == "active",
+            )))
+        if not ids:
+            return []
+        stored_vectors = memories.load_memory_item_semantic_vectors(
+            tuple(ids),
+            provider=identity.provider,
+            model=identity.model,
+            dimensions=identity.dimensions,
+            version=identity.version,
+        )
+        scored: list[tuple[float, int]] = []
+        for memory_id, stored in stored_vectors.items():
+            if int(memory_id) in exclude_ids or not stored:
+                continue
+            score = _cosine_similarity(vector, stored)
+            if score >= _SEMANTIC_CANDIDATE_MIN_COSINE:
+                scored.append((score, int(memory_id)))
+        if not scored:
+            return []
+        scored.sort(reverse=True)
+        top_ids = [memory_id for _score, memory_id in scored[: max(1, int(limit))]]
+        return list(session.scalars(select(MemoryItem).where(MemoryItem.id.in_(top_ids))))
+    except Exception:
+        logging.getLogger(__name__).exception("semantic_vector_candidates_failed")
+        return []
+
+
+def _cosine_similarity(left: list[float], right: list[float]) -> float:
+    if not left or not right or len(left) != len(right):
+        return 0.0
+    dot = sum(a * b for a, b in zip(left, right))
+    norm_left = sum(a * a for a in left) ** 0.5
+    norm_right = sum(b * b for b in right) ** 0.5
+    if norm_left <= 0.0 or norm_right <= 0.0:
+        return 0.0
+    return dot / (norm_left * norm_right)
 
 
 def build_memory_runtime(
@@ -553,6 +610,19 @@ def build_memory_runtime(
                     subject_ids=resolved_query.subject_ids,
                 )
             )
+            if settings.memory_fact_semantic_ranking_enabled and embedding_provider.available:
+                # 向量候选通道：FTS 只能命中用词相近的记忆，"语义相关但措辞
+                # 不同"的旧事实靠 query embedding 对该群真向量暴力余弦补进
+                # 候选池，再交给后面的 SemanticFactRanker 统一精排。
+                rows = rows + _semantic_vector_candidates(
+                    session,
+                    memories,
+                    embedding_provider,
+                    group_id=group_id,
+                    query=str(resolved_query.retrieval_query),
+                    exclude_ids={row.id for row in rows},
+                    limit=max(5, int(getattr(settings, "memory_vector_candidate_limit", 10) or 10)),
+                )
             subject_ids = resolved_query.subject_ids
             policy = fact_intent_policy(
                 query=str(resolved_query.original_query),

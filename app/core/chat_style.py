@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 
 
@@ -43,6 +44,9 @@ def build_human_chat_style_lines(
     voice_key = str(voice or "komachi").strip().lower()
     clingy_voice = bool(komachi_style) and voice_key == "clingy"
     tieba_voice = bool(komachi_style) and voice_key == "tieba"
+    # 本机补丁：voice=neutral 表示“完全由 persona.yaml 定义角色语气”，
+    # 不再注入小町的雌小鬼边，用于替换成非小町角色（如鲸鱼娘）。
+    neutral_voice = bool(komachi_style) and voice_key == "neutral"
     lines = [
         "Talk like a real person chatting on QQ."
         if str(chat_context).strip().lower() == "private"
@@ -61,6 +65,13 @@ def build_human_chat_style_lines(
                 "Keep a relaxed Baidu Tieba veteran voice: quick to catch a meme, a pun, or deliberate bait, but never pretend to know an uncertain reference.",
                 "串场 is playful contextual riffing, not harassment: tease the situation lightly and stop when the other person is serious or uncomfortable.",
                 "Use short spoken Chinese with an occasional deadpan turn, forum slang, or callback; do not force a meme into every reply.",
+            ]
+        )
+    elif neutral_voice:
+        lines.extend(
+            [
+                "Stay fully in the configured persona's own voice; do not add any Komachi-style mesugaki edge or smug superiority.",
+                "The persona profile above is the single source of tone, verbal tics and habits; follow it consistently and never drift into a generic assistant voice.",
             ]
         )
     elif komachi_style:
@@ -121,7 +132,9 @@ def build_human_chat_style_lines(
                 "For proactive interjections, do not turn the reply into a mini-analysis, recap, or tidy conclusion.",
             ]
             )
-            if komachi_style:
+            # 本机补丁：voice=neutral 时不注入小町的毒舌插话规则，否则换人设后
+            # 主动插话仍会串味（被动回复分支已在上面放过 neutral）。
+            if komachi_style and not neutral_voice:
                 lines.extend(
                     [
                         "For proactive interjections, lean into Komachi's mesugaki personality: smug, cheeky, lightly teasing the speaker like catching them doing something silly.",
@@ -431,6 +444,30 @@ def burst_delays(burst: dict | None, *, segment_count: int) -> tuple[float, floa
     delay_min = max(0.0, float(burst.get("min_delay_seconds") or 0.8))
     delay_max = max(delay_min, float(burst.get("max_delay_seconds") or 2.5))
     return delay_min, delay_max
+
+
+def typing_delay_seconds(settings, text: str, *, rng=random) -> float:
+    """Human "read then type" pause before a reply lands, in seconds.
+
+    Real people never answer the instant a message arrives: they finish
+    reading, think, then type.  The delay scales with the reply length so a
+    short jab lands fast and a longer paragraph lands slower, then is capped.
+    Disabled entirely (returns 0.0) unless base/per_char are configured, so
+    tests and defaults keep the old immediate-send behaviour.
+    """
+
+    base = max(0.0, float(getattr(settings, "group_reply_typing_base_seconds", 0.0) or 0.0))
+    base_max = max(base, float(getattr(settings, "group_reply_typing_base_max_seconds", 0.0) or 0.0))
+    per_char = max(0.0, float(getattr(settings, "group_reply_typing_per_char_seconds", 0.0) or 0.0))
+    cap = max(0.0, float(getattr(settings, "group_reply_typing_max_seconds", 0.0) or 0.0))
+    if base <= 0.0 and per_char <= 0.0:
+        return 0.0
+    jitter = rng.uniform(base, base_max) if base_max > base else base
+    length = min(len(str(text or "")), 300)
+    delay = jitter + per_char * length
+    if cap > 0.0:
+        delay = min(delay, cap)
+    return max(0.0, delay)
 
 
 def normalize_chat_reply_burst_aware(text: str, burst: dict | None) -> str:

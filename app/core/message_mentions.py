@@ -16,7 +16,7 @@ def calls_bot_by_name(text: str, bot_names: Iterable[str]) -> bool:
         r')(?=$|[\s，,:：！!？?]|你|帮|来|请|看|查|搜|说|画|生成|能|可以|把|给|解释|分析)', text.strip(), re.I))
 
 
-def addressing_evidence(raw, *, bot_id, bot_names=(), text='', reply_author_id=None):
+def addressing_evidence(raw, *, bot_id, bot_names=(), text='', reply_author_id=None, author_id=None):
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
@@ -32,8 +32,15 @@ def addressing_evidence(raw, *, bot_id, bot_names=(), text='', reply_author_id=N
         if re.fullmatch(r'[0-9]{1,19}', str(value)) and 0 < int(value) < 2**63:
             targets.append(int(value))
     at_bot = bot_id in targets
-    other = (any(value != bot_id for value in targets) or
-        reply_author_id is not None and reply_author_id != bot_id) and not at_bot and reply_author_id != bot_id
+    # 本机补丁：引用「自己上一条消息」不算在跟别人说话。原来的判定只看
+    # reply_author_id != bot_id，于是在 QQ 里回复自己的消息会被当成 other_addressee，
+    # 直接把 ongoing_exchange（不 @ 接着聊）挡掉。
+    quoted_someone_else = (
+        reply_author_id is not None
+        and reply_author_id != bot_id
+        and (author_id is None or reply_author_id != author_id)
+    )
+    other = (any(value != bot_id for value in targets) or quoted_someone_else) and not at_bot and reply_author_id != bot_id
     return {'bot_id': bot_id, 'at_user_ids': list(dict.fromkeys(targets)),
         'reply_author_id': reply_author_id, 'bot_explicitly_called': at_bot or calls_bot_by_name(text, bot_names),
         'other_addressee': bool(other)}

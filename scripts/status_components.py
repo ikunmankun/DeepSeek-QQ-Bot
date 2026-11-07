@@ -239,7 +239,7 @@ def _check_persona_state(db: sqlite3.Connection, settings: AppSettings) -> bool:
 
 def check_worker_status(settings: AppSettings) -> bool:
     ok = True
-    for name in ("persona_sync", "member_facts"):
+    for name in ("persona_sync", "member_facts", "memory_decay"):
         path = settings.log_dir / f"{name}.worker.json"
         if not path.is_file():
             _print("WARN", name + "_worker", "marker missing; waiting for first tick")
@@ -286,7 +286,10 @@ def check_provider_config(settings: AppSettings) -> bool:
         "OK" if image_ok else "FAIL", "image_provider_config",
         f"transport={settings.group_image_transport} model={settings.group_image_model}",
     )
-    search_ok = settings.search_provider.strip().lower() == "ddgs" or bool(
+    # 本机补丁：deepseek 等 provider 复用 LLM 的 base_url/api_key，不需要独立
+    # 的 SEARCH_API_KEY。原判定只看 search_api_key，会把这些 provider 误报为 WARN。
+    provider_key = settings.search_provider.strip().lower()
+    search_ok = provider_key in {"ddgs", "deepseek"} or bool(
         settings.search_api_key.strip()
     )
     _print(

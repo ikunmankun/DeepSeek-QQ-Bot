@@ -8,6 +8,7 @@ from app.core.memory_contracts import (
     ObservationEvidence,
     ObservationFact,
 )
+from app.core.memory_decay import is_faded
 from app.core.memory_source_guard import is_usable_memory_source, memory_provenance_ids
 from app.core.memory_engine import history_search_terms
 from app.core.persona_style_retrieval import lexical_units
@@ -121,6 +122,10 @@ class MemoryObservationReader:
                 or None,
             )
             for memory in candidates:
+                # 淡忘的记忆不进参与提示：闲聊要想起的是最近的事；显式
+                # memory_read 工具不受此限，"被一提醒就想起来"走那条路。
+                if request.now is not None and is_faded(memory, request.now):
+                    continue
                 source_ids = memory_provenance_ids(memory)
                 if not source_ids:
                     continue

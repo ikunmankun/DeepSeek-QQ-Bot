@@ -32,7 +32,7 @@ from app.core.memory_query_resolver import MemoryQueryResolver
 from app.core.memory_source_guard import is_usable_memory_source
 from app.core.memory_tool_executor import MemoryToolExecutor
 from app.core.memory_tools import DEFAULT_MEMORY_TOOL_TIMEOUT_SECONDS, validate_memory_search_args
-from app.core.time_utils import shanghai_aware, stored_as_utc
+from app.core.time_utils import shanghai_aware, shanghai_naive, stored_as_utc
 from app.runtime.blocking import AgentModelBusyError
 from app.runtime.memory_composition import _evidence_messages_from_rows
 from app.storage.db import session_scope
@@ -601,6 +601,9 @@ async def call_agent_memory_tool(context: ServiceToolContext, name: str, argumen
         member = arguments.get("member")
         requested_limit = arguments.get("limit", maximum)
         result_limit = min(maximum, requested_limit)
+        if str(arguments.get("layer") or "all") == "life":
+            return _life_search_outcome(context, query=str(arguments["query"]).strip(),
+                                        limit=result_limit)
         outcome = await _run_read(context, query=arguments["query"].strip(), addressed=False,
             layer=str(arguments.get("layer") or "all"), member=member.strip() if member else None,
             limit=result_limit)
@@ -615,3 +618,22 @@ async def call_agent_memory_tool(context: ServiceToolContext, name: str, argumen
         return await _run_read(context, query="完整个人画像", addressed=False,
             layer="facts", member=member.strip(), limit=maximum)
     return ToolOutcome({"error": "unknown_tool"}, "failed")
+
+
+def _life_search_outcome(context, *, query: str, limit: int) -> ToolOutcome:
+    """人生笔记检索：不进 orchestrator，直接查 life_notes（FTS+向量）。"""
+
+    from app.core.life_notes import search_life_notes
+
+    try:
+        rows = search_life_notes(context.router.engine, query=query, limit=max(1, limit),
+                                 embedding_provider=getattr(context, "embedding_provider", None))
+    except Exception:
+        logger.exception("life_layer_search_failed")
+        rows = []
+    return ToolOutcome({"kind": "life_notes",
+        "notes": [{"id": row.id, "date": (shanghai_naive(row.created_at).strftime("%Y-%m-%d")
+                                          if row.created_at is not None else ""),
+                   "kind": row.kind, "title": row.title, "content": row.content}
+                  for row in rows],
+        "guidance": "人生笔记是真实发生过的长期记忆，可以自然引用；没有命中就直说想不起来。"})

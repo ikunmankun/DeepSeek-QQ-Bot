@@ -9,7 +9,7 @@ from pathlib import Path
 
 from app.agent.social_planner import SocialPlanner
 from app.config import _deep_merge_mapping, _read_yaml
-from app.core.persona_engine import _normalize_traits
+from app.core.persona_engine import EXAMPLE_PREFIX, _normalize_traits, normalize_persona
 
 
 class PublicPersonaContractError(ValueError):
@@ -17,13 +17,15 @@ class PublicPersonaContractError(ValueError):
 
 
 def _check_profile(profile: dict) -> dict:
+    profile = normalize_persona(profile)
     rendered = SocialPlanner._render_public_persona(profile)
     examples = _normalize_traits(profile.get("example_lines"))[:16]
     member = "source_user_id" in profile or "source_group_id" in profile
     if member:
         examples = []
     if examples:
-        expected = "Example replies: " + " ".join(f"「{line}」" for line in examples) + "."
+        # Must mirror render_persona exactly; both sides share EXAMPLE_PREFIX.
+        expected = EXAMPLE_PREFIX + "\n" + "\n".join(f"  {line}" for line in examples)
         if expected not in rendered:
             raise PublicPersonaContractError("public_persona_examples_incomplete")
     if len(rendered) > 4000:

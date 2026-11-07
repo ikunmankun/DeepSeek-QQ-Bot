@@ -6,6 +6,7 @@ from typing import Any
 
 from app.core.message_content import ImageAttachment, extract_images_from_message, extract_reply_to_msg_id
 from app.core.forward_content import extract_forward_ids
+from app.core.qq_faces import FACE_SEGMENT_TYPES, segment_text
 from app.core.shared_content import extract_shared_links, segment_display
 
 
@@ -48,6 +49,11 @@ def _flatten_message(message: list[dict[str, Any]] | str) -> str:
             continue
         if item.get("type") == "text":
             parts.append(item.get("data", {}).get("text", ""))
+        elif item.get("type") in FACE_SEGMENT_TYPES:
+            # 本机补丁：QQ 自带表情以前在这里被整段丢掉，模型只看到空字符串，
+            # 用户「发个微笑」等于什么都没说。译成 [表情：微笑] /
+            # [表情包：开心] 后模型能读懂语气，也能照着这个记号回表情。
+            parts.append(segment_text(item))
         elif extract_forward_ids([item]):
             parts.append("[合并转发消息]")
         elif item.get('type') in {'share', 'json', 'xml'} and card_count < 8:

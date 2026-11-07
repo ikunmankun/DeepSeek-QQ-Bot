@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 
 from app.core.legacy_memory_context import format_member_label
+from app.core.qq_faces import FACE_SEGMENT_TYPES, segment_text
 
 
 QUOTED_PRONOUN_PATTERN = re.compile(r"他|她|那位|这位|这个人|那家伙")
@@ -31,7 +32,15 @@ def flatten_raw_message_text(raw_payload: dict | None) -> str:
         return ""
     parts: list[str] = []
     for item in message:
-        if not isinstance(item, dict) or item.get("type") != "text":
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("type")
+        if kind in FACE_SEGMENT_TYPES:
+            # 被引用的消息可能只有一个表情，识别成空串会让「他那个表情是什么意思」
+            # 彻底没有上下文。
+            parts.append(segment_text(item))
+            continue
+        if kind != "text":
             continue
         text = str(item.get("data", {}).get("text", ""))
         if text:

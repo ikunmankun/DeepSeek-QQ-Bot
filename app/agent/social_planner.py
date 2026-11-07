@@ -63,6 +63,8 @@ class SocialPlanner:
 
     @staticmethod
     def _render_public_persona(public: dict) -> str:
+        from app.core.persona_engine import normalize_persona
+        public = normalize_persona(public)
         profile = {key: public[key] for key in PUBLIC_PERSONA_FIELDS if key in public}
         # Authored bot examples are public expression. Member-derived examples
         # can contain private source utterances and must stay out of Qzone.

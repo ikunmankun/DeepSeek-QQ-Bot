@@ -77,7 +77,7 @@ def test_load_runtime_config_reads_yaml_and_env(tmp_path, monkeypatch) -> None:
     assert runtime.safety["deny_prompt_leak"] is True
 
 
-def test_project_default_persona_is_mouthy_komachi_and_other_variant_remains_switchable(tmp_path, monkeypatch) -> None:
+def test_project_default_persona_is_whale_chan_and_komachi_variants_remain_switchable(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("NAPCAT_WS_URL", "ws://127.0.0.1:3001")
     monkeypatch.setenv("LLM_BASE_URL", "https://api.openai.com/v1")
     monkeypatch.setenv("LLM_API_KEY", "test-key")
@@ -87,9 +87,9 @@ def test_project_default_persona_is_mouthy_komachi_and_other_variant_remains_swi
     settings = AppSettings(_env_file=None, config_dir=Path("configs"), data_dir=tmp_path / "data")
     runtime = load_runtime_config(settings)
 
-    assert runtime.persona["name"] == "比企谷小町"
-    assert runtime.persona["switch_label"] == "嘴臭小町"
-    assert runtime.persona["chat_voice"] == "komachi"
+    # 默认人格已从"比企谷小町"换成鲸鱼娘（大肥鱼）；小町系变体仍可切换。
+    assert runtime.persona["name"] == "鲸鱼娘"
+    assert "switch_label" not in runtime.persona
     assert runtime.personas["komachi_clingy"]["name"] == "比企谷小町"
     assert runtime.personas["komachi_clingy"]["aliases"] == ["粘人小町", "撒娇小町", "小町"]
     assert runtime.personas["mouthy_komachi"]["chat_voice"] == "komachi"

@@ -47,8 +47,12 @@ def _has_images(row) -> bool:
     return any(isinstance(p,dict) and p.get('type')=='image' for p in raw.get('message',raw.get('raw_message',[])))
 
 
-def select_group_image_sources(engine, group_id, source_message_ids, *, target_source_id=None, now=None):
+def select_group_image_sources(engine, group_id, source_message_ids, *, target_source_id=None, now=None,
+                               bot_names=None):
     """Resolve current/quoted pixels, or a bounded same-sender pointing request."""
+    # 本机补丁：原来这里写死 {'小町','比企谷小町'}，换成自定义人设后
+    # “大肥鱼，看看这张图”这类请求就认不出来；改由调用方传入实际称呼。
+    names = set(bot_names) if bot_names else {'小町', '比企谷小町'}
     with session_scope(engine) as session:
         if target_source_id is None:
             # Autonomous observation may inspect a fresh image event, never
@@ -67,8 +71,8 @@ def select_group_image_sources(engine, group_id, source_message_ids, *, target_s
             quote=session.scalar(select(Message).where(Message.group_id==group_id,Message.platform_msg_id==target.reply_to_msg_id))
             if quote is not None and is_usable_memory_source(quote,group_id=group_id) and _has_images(quote):
                 return GroupImageSelection((quote.id,),'quoted')
-            return GroupImageSelection(reason='image_reference_unavailable' if is_image_reference_followup(target.plain_text,bot_names={'小町','比企谷小町'}) else 'no_image_request')
-        if not is_image_reference_followup(target.plain_text,bot_names={'小町','比企谷小町'}):
+            return GroupImageSelection(reason='image_reference_unavailable' if is_image_reference_followup(target.plain_text,bot_names=names) else 'no_image_request')
+        if not is_image_reference_followup(target.plain_text,bot_names=names):
             return GroupImageSelection()
         candidates=session.scalars(select(Message).where(Message.group_id==group_id,Message.user_id==target.user_id,
             Message.id<target.id).order_by(Message.id.desc()).limit(20))

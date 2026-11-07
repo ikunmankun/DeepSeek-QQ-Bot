@@ -23,6 +23,8 @@ dependencies = [
   "SQLAlchemy>=2.0.36",
   "sqlite-vec==0.1.9",
   "websockets>=13.1",
+  "playwright>=1.49,<2",
+  "qrcode[pil]>=8.0",
 ]
 
 [project.optional-dependencies]

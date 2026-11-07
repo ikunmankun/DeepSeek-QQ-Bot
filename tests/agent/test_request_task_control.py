@@ -752,3 +752,14 @@ def test_chinese_explicit_date_is_a_user_bound(tmp_path,query,days):
     goal=control(tmp_path,query)
     assert goal.explicit_recent_days==days
     assert goal.publication_filter['provenance']=='explicit_user'
+
+
+def test_pick_sticker_artifact_counts_as_observed_for_delivery(tmp_path):
+    """斗图链路：pick_sticker 取到的产物必须能通过交付预检，不能被任务层拦下。"""
+    goal=control(tmp_path, request='陪我聊天')
+    goal.observe('pick_sticker', {'keyword':'无语'},
+        ToolOutcome({'artifact_id':'art-sticker-1','meme_id':'037_无语_看戏',
+            'origin':'local_sticker_library'}), 'pick')
+    assert goal.preflight('send_group', {'text':'接招', 'artifact_ids':['art-sticker-1']}) is None
+    result=goal.preflight('send_group', {'text':'再来', 'artifact_ids':['art-unknown']})
+    assert result is not None and 'artifact_not_observed_for_request' in result.data['missing']

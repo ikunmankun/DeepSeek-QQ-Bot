@@ -2082,8 +2082,8 @@ async def test_router_enqueues_explicit_group_draw_request_when_replying_to_imag
     router.reply_policy = AlwaysDirectTriggerReplyPolicy()
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(False, "none", 0),
     )
 
@@ -2344,8 +2344,8 @@ async def test_router_passes_images_for_addressed_turn_without_putting_them_in_r
     router = InboundRouter.build_for_test(sqlite_engine=sqlite_engine, sender=sender, llm_client=llm)
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
 
@@ -2422,8 +2422,8 @@ async def test_router_addressed_image_reference_uses_only_requester_prior_image(
             )
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
     await router.handle_group_message(
@@ -2506,8 +2506,8 @@ async def test_router_subject_bound_memory_query_excludes_ambient_recent_images(
         )
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
     await router.handle_group_message(
@@ -2554,8 +2554,8 @@ async def test_router_subject_bound_query_keeps_explicit_current_image(
         memory_orchestrator=SubjectBoundMemoryOrchestrator(),
     )
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
 
@@ -2588,7 +2588,7 @@ async def test_router_caches_inbound_image_payload_before_persisting(sqlite_engi
     def fake_cache(raw_payload, *, cache_dir) -> None:
         raw_payload["message"][0]["data"]["local_path"] = str(cache_dir / "10001" / "cached.png")
 
-    monkeypatch.setattr(router_module, "cache_images_in_raw_payload", fake_cache)
+    monkeypatch.setattr("app.core.router.ingest.cache_images_in_raw_payload", fake_cache)
 
     await router.handle_group_message(
         make_event(
@@ -2671,8 +2671,8 @@ async def test_router_does_not_pass_images_for_unaddressed_turn_even_if_it_repli
     router.reply_policy = AlwaysReplyPolicy()
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(False, "none", 0),
     )
 
@@ -2696,7 +2696,7 @@ async def test_router_adds_image_fallback_text_for_image_only_addressed_turn(sql
     sender = FakeSender()
     llm = ImageCapturingLlm()
     router = InboundRouter.build_for_test(sqlite_engine=sqlite_engine, sender=sender, llm_client=llm)
-    monkeypatch.setattr(router_module, "cache_images_in_raw_payload", _fake_cache_local_paths)
+    monkeypatch.setattr("app.core.router.ingest.cache_images_in_raw_payload", _fake_cache_local_paths)
 
     await router.handle_group_message(
         make_event(
@@ -3060,7 +3060,7 @@ async def test_router_uses_followup_image_after_prior_addressed_turn_even_with_i
     sender = FakeSender()
     llm = ImageCapturingLlm()
     router = InboundRouter.build_for_test(sqlite_engine=sqlite_engine, sender=sender, llm_client=llm)
-    monkeypatch.setattr(router_module, "cache_images_in_raw_payload", _fake_cache_local_paths)
+    monkeypatch.setattr("app.core.router.ingest.cache_images_in_raw_payload", _fake_cache_local_paths)
 
     await router.handle_group_message(
         make_event(
@@ -3196,7 +3196,7 @@ async def test_router_does_not_bind_stale_image_for_non_image_addressed_text(sql
     sender = FakeSender()
     llm = ImageCapturingLlm()
     router = InboundRouter.build_for_test(sqlite_engine=sqlite_engine, sender=sender, llm_client=llm)
-    monkeypatch.setattr(router_module, "cache_images_in_raw_payload", _fake_cache_local_paths)
+    monkeypatch.setattr("app.core.router.ingest.cache_images_in_raw_payload", _fake_cache_local_paths)
 
     await router.handle_group_message(
         make_event(
@@ -3228,7 +3228,7 @@ async def test_router_uses_latest_recent_image_after_intervening_user_text(sqlit
     llm = ImageCapturingLlm()
     router = InboundRouter.build_for_test(sqlite_engine=sqlite_engine, sender=sender, llm_client=llm)
     router.runtime.persona["name"] = "比企谷小町"
-    monkeypatch.setattr(router_module, "cache_images_in_raw_payload", _fake_cache_local_paths)
+    monkeypatch.setattr("app.core.router.ingest.cache_images_in_raw_payload", _fake_cache_local_paths)
 
     await router.handle_group_message(
         make_event(
@@ -3417,7 +3417,7 @@ def test_router_skips_image_cache_downloads_during_historical_ingest(sqlite_engi
         del raw_payload, cache_dir
         cache_calls.append("called")
 
-    monkeypatch.setattr(router_module, "cache_images_in_raw_payload", fake_cache)
+    monkeypatch.setattr("app.core.router.ingest.cache_images_in_raw_payload", fake_cache)
 
     persisted = router.ingest_historical_group_message(event)
 
@@ -4100,11 +4100,11 @@ async def test_router_uses_recent_minute_traffic_for_proactive_reply(sqlite_engi
             )
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(False, "none", 0),
     )
-    monkeypatch.setattr(router_module, "is_time_sensitive_request", lambda text: text == "最近这动画更新了")
+    monkeypatch.setattr("app.core.router.reply.is_time_sensitive_request", lambda text: text == "最近这动画更新了")
 
     await router.handle_group_message(
         make_event(
@@ -4128,8 +4128,8 @@ async def test_router_keeps_full_proactive_reply_content_in_one_message(sqlite_e
     router.reply_policy = AlwaysProactiveReplyPolicy()
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(False, "none", 0),
     )
 
@@ -4159,8 +4159,8 @@ async def test_router_treats_unaddressed_direct_trigger_as_short_group_interject
     router.reply_policy = AlwaysDirectTriggerReplyPolicy()
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(False, "none", 0),
     )
 
@@ -4214,11 +4214,11 @@ async def test_router_uses_search_for_addressed_time_sensitive_turn(sqlite_engin
     )
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
-    monkeypatch.setattr(router_module, "is_time_sensitive_request", lambda text: text == "need-search")
+    monkeypatch.setattr("app.core.router.reply.is_time_sensitive_request", lambda text: text == "need-search")
 
     await router.handle_group_message(
         make_event(
@@ -4248,11 +4248,11 @@ async def test_router_normalizes_relative_year_queries_before_search(sqlite_engi
     )
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
-    monkeypatch.setattr(router_module, "is_time_sensitive_request", lambda text: text == "今年欧冠冠军是谁")
+    monkeypatch.setattr("app.core.router.reply.is_time_sensitive_request", lambda text: text == "今年欧冠冠军是谁")
 
     await router.handle_group_message(
         make_event(
@@ -4286,11 +4286,11 @@ async def test_router_logs_search_audit_trail(sqlite_engine, monkeypatch, caplog
     )
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
-    monkeypatch.setattr(router_module, "is_time_sensitive_request", lambda text: text == "need-search")
+    monkeypatch.setattr("app.core.router.reply.is_time_sensitive_request", lambda text: text == "need-search")
 
     with caplog.at_level(logging.INFO):
         await router.handle_group_message(
@@ -4322,11 +4322,11 @@ async def test_router_skips_search_for_non_time_sensitive_addressed_turn(sqlite_
     )
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
-    monkeypatch.setattr(router_module, "is_time_sensitive_request", lambda text: text == "need-search")
+    monkeypatch.setattr("app.core.router.reply.is_time_sensitive_request", lambda text: text == "need-search")
 
     await router.handle_group_message(
         make_event(
@@ -4356,11 +4356,11 @@ async def test_router_uses_search_for_explicit_search_request_without_time_sensi
     )
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
-    monkeypatch.setattr(router_module, "is_time_sensitive_request", lambda text: False)
+    monkeypatch.setattr("app.core.router.reply.is_time_sensitive_request", lambda text: False)
 
     await router.handle_group_message(
         make_event(
@@ -4389,12 +4389,12 @@ async def test_router_uses_search_for_reference_topic_without_explicit_search_wo
     )
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
-    monkeypatch.setattr(router_module, "is_time_sensitive_request", lambda text: False)
-    monkeypatch.setattr(router_module, "needs_reference_search", lambda text: text == "need-search")
+    monkeypatch.setattr("app.core.router.reply.is_time_sensitive_request", lambda text: False)
+    monkeypatch.setattr("app.core.router.reply.needs_reference_search", lambda text: text == "need-search")
 
     await router.handle_group_message(
         make_event(
@@ -4425,8 +4425,8 @@ async def test_router_uses_search_for_location_recommendation_without_explicit_s
     )
 
     monkeypatch.setattr(
-        router_module,
-        "is_time_sensitive_request",
+        
+        "app.core.router.reply.is_time_sensitive_request",
         lambda text: False,
     )
 
@@ -4457,8 +4457,8 @@ async def test_router_allows_search_decision_for_general_knowledge_question(sqli
     )
 
     monkeypatch.setattr(
-        router_module,
-        "is_time_sensitive_request",
+        
+        "app.core.router.reply.is_time_sensitive_request",
         lambda text: False,
     )
 
@@ -4512,7 +4512,7 @@ async def test_router_includes_grounding_note_for_local_lookup_without_exact_flo
         web_search_client=search_client,
     )
 
-    monkeypatch.setattr(router_module, "is_time_sensitive_request", lambda text: False)
+    monkeypatch.setattr("app.core.router.reply.is_time_sensitive_request", lambda text: False)
 
     await router.handle_group_message(
         make_event(
@@ -4613,11 +4613,11 @@ async def test_router_forces_search_for_reference_topic_without_llm_opt_out(sqli
     )
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
-    monkeypatch.setattr(router_module, "is_time_sensitive_request", lambda text: False)
+    monkeypatch.setattr("app.core.router.reply.is_time_sensitive_request", lambda text: False)
 
     await router.handle_group_message(
         make_event(
@@ -4669,11 +4669,11 @@ async def test_router_logs_proactive_reply_decision(sqlite_engine, monkeypatch, 
             )
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(False, "none", 0),
     )
-    monkeypatch.setattr(router_module, "is_time_sensitive_request", lambda text: text == "最新动画怎么样")
+    monkeypatch.setattr("app.core.router.reply.is_time_sensitive_request", lambda text: text == "最新动画怎么样")
 
     with caplog.at_level(logging.INFO):
         await router.handle_group_message(
@@ -4703,11 +4703,11 @@ async def test_router_replies_when_search_client_raises(sqlite_engine, monkeypat
     )
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
-    monkeypatch.setattr(router_module, "is_time_sensitive_request", lambda text: text == "need-search")
+    monkeypatch.setattr("app.core.router.reply.is_time_sensitive_request", lambda text: text == "need-search")
 
     await router.handle_group_message(
         make_event(
@@ -4752,11 +4752,11 @@ async def test_router_replies_when_search_decision_generation_raises(sqlite_engi
     )
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
-    monkeypatch.setattr(router_module, "is_time_sensitive_request", lambda text: text == "need-search")
+    monkeypatch.setattr("app.core.router.reply.is_time_sensitive_request", lambda text: text == "need-search")
 
     await router.handle_group_message(
         make_event(
@@ -4788,8 +4788,7 @@ async def test_router_injects_runtime_clock_facts_for_date_question_without_sear
     )
 
     monkeypatch.setattr(
-        router_module,
-        "build_current_datetime_facts",
+        "app.core.router.reply.build_current_datetime_facts",
         lambda now: [
             "Current local datetime: 2026-05-09 13:26:00 +08:00",
             "Current local date: 2026-05-09",
@@ -4828,8 +4827,7 @@ async def test_router_injects_runtime_clock_facts_for_current_year_question_with
     )
 
     monkeypatch.setattr(
-        router_module,
-        "build_current_datetime_facts",
+        "app.core.router.reply.build_current_datetime_facts",
         lambda now: [
             "Current local datetime: 2026-05-09 15:52:50 +08:00",
             "Current local date: 2026-05-09",
@@ -4866,11 +4864,11 @@ async def test_router_skips_search_decision_call_when_no_search_client(sqlite_en
     )
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
-    monkeypatch.setattr(router_module, "is_time_sensitive_request", lambda text: text == "need-search")
+    monkeypatch.setattr("app.core.router.reply.is_time_sensitive_request", lambda text: text == "need-search")
 
     await router.handle_group_message(
         make_event(
@@ -4902,8 +4900,8 @@ async def test_router_scopes_builtin_search_when_a_search_model_is_configured(
     router.runtime.settings.llm_web_search_model = "deepseek-v4-pro"
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
 
@@ -4951,8 +4949,8 @@ async def test_router_keeps_wide_builtin_search_without_a_search_model(
     router.runtime.settings.llm_web_search_model = ""
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
 
@@ -4983,8 +4981,8 @@ async def test_router_attaches_builtin_web_search_for_addressed_turn_without_tim
     router.runtime.settings.llm_builtin_web_search = True
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
 
@@ -5021,8 +5019,8 @@ async def test_router_forces_builtin_web_search_for_explicit_request(
     router.runtime.settings.llm_builtin_web_search = True
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
 
@@ -5057,8 +5055,8 @@ async def test_router_compacts_memory_budget_for_explicit_search_turn(sqlite_eng
     )
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
 
@@ -5089,8 +5087,8 @@ async def test_router_caps_memory_budget_for_auto_search_turn(sqlite_engine, mon
     router.runtime.settings.llm_builtin_web_search = True
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
 
@@ -5120,8 +5118,8 @@ async def test_router_keeps_memory_budget_when_search_is_unavailable(sqlite_engi
     )
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(True, "named_bot", 10),
     )
 
@@ -6291,8 +6289,8 @@ async def test_router_model_judge_no_keeps_bot_silent(sqlite_engine, monkeypatch
     router.proactive_judge_client = judge
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(False, "none", 0),
     )
 
@@ -6321,8 +6319,8 @@ async def test_router_model_judge_yes_runs_full_proactive_flow(sqlite_engine, mo
     router.proactive_judge_client = judge
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(False, "none", 0),
     )
 
@@ -6348,8 +6346,8 @@ async def test_router_proactive_candidate_without_judge_client_stays_silent(sqli
     router.reply_policy = AlwaysCandidateReplyPolicy()
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(False, "none", 0),
     )
 
@@ -6405,8 +6403,8 @@ async def test_router_local_proactive_candidate_skips_judge_and_replies(sqlite_e
             )
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(False, "none", 0),
     )
 
@@ -6479,8 +6477,8 @@ async def test_router_proactive_judge_and_generation_include_explicitly_quoted_i
         )
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(False, "none", 0),
     )
 
@@ -6516,13 +6514,13 @@ async def test_router_proactive_judge_limits_current_multiple_images(
     router.runtime.settings.proactive_image_max_count = 1
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(False, "none", 0),
     )
     monkeypatch.setattr(
-        router_module,
-        "cache_images_in_raw_payload",
+        
+        "app.core.router.ingest.cache_images_in_raw_payload",
         lambda raw_payload, *, cache_dir: None,
     )
 
@@ -6590,8 +6588,8 @@ async def test_router_throttles_back_to_back_proactive_interjections(sqlite_engi
     router.proactive_judge_client = judge
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(False, "none", 0),
     )
 
@@ -6630,8 +6628,8 @@ async def test_router_proactive_reservation_blocks_concurrent_second_interjectio
     router.proactive_judge_client = judge
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(False, "none", 0),
     )
 
@@ -6677,8 +6675,8 @@ async def test_router_proactive_acceptance_rate_zero_blocks_after_judge(sqlite_e
     router.runtime.group_policy["groups"]["10001"]["proactive_acceptance_rate"] = 0.0
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(False, "none", 0),
     )
 
@@ -6710,8 +6708,8 @@ async def test_router_proactive_acceptance_rate_is_deterministic_per_message(sql
     router.runtime.group_policy["groups"]["10001"]["proactive_acceptance_rate"] = 0.5
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(False, "none", 0),
     )
 
@@ -6760,8 +6758,8 @@ async def test_router_proactive_turn_uses_full_memory_build_context(sqlite_engin
     router.memory_orchestrator.build_context = capture_build_context
 
     monkeypatch.setattr(
-        router_module,
-        "detect_address_intent",
+        
+        "app.core.router.reply.detect_address_intent",
         lambda **kwargs: AddressDecision(False, "none", 0),
     )
 

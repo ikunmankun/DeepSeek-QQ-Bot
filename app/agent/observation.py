@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -17,6 +18,8 @@ from app.storage.participation_feedback import feedback_for
 from app.core.time_utils import shanghai_aware
 from app.storage.db import session_scope
 from app.storage.repositories import GroupRepository, MessageRepository, UserRepository
+
+logger = logging.getLogger(__name__)
 
 
 class GroupObservationService:
@@ -53,6 +56,7 @@ class GroupObservationService:
         quoted = messages.get_by_platform_msg_id(source.reply_to_msg_id) if source is not None and source.reply_to_msg_id else None
         evidence = addressing_evidence(source.raw_json if source is not None else {},
             bot_id=router.runtime.settings.bot_qq, bot_names=names, text=event.plain_text,
+            author_id=event.user_id,
             reply_author_id=quoted.user_id if is_usable_memory_source(quoted, group_id=event.group_id) else None)
         if source is not None:
             if detect_feedback(source, recent, bot_id=router.runtime.settings.bot_qq, bot_names=names, messages=messages):
@@ -62,6 +66,9 @@ class GroupObservationService:
             ):
                 return False
         persona = router._active_persona(event.group_id)
+        recent_bot_count = sum(
+            item.user_id == router.runtime.settings.bot_qq for item in recent[-3:]
+        )
         address = detect_address_intent(
             text=event.plain_text.lower(),
             bot_names=router._build_bot_names(str(persona.get("name", ""))),
@@ -72,10 +79,28 @@ class GroupObservationService:
             bot_recently_participated=any(
                 item.user_id == router.runtime.settings.bot_qq for item in recent[-10:]
             ),
-            recent_bot_message_count=sum(
-                item.user_id == router.runtime.settings.bot_qq for item in recent[-3:]
-            ),
+            recent_bot_message_count=recent_bot_count,
             other_addressee=evidence['other_addressee'] and not event.mentioned_bot,
+            # 本机补丁：harness 的准入判定原本不传这个开关，导致 router 里新增的
+            # ongoing_exchange（不 @ 也能接着聊）在准入阶段就被否掉，消息根本
+            # 进不了 agent。开关与 router 共用同一个群策略键。
+            allow_ongoing_exchange=router._group_policy_bool(
+                group_id=event.group_id,
+                key="reply_to_ongoing_exchange",
+                default=False,
+            ),
+        )
+        # 本机补丁：把这轮准入判定打出来，以后"为什么不回"不用再靠猜。
+        logger.info(
+            "group_direct_decision group_id=%s msg_id=%s addressed=%s reason=%s mentioned=%s "
+            "recent_bot=%s other_addressee=%s",
+            event.group_id,
+            event.platform_msg_id,
+            address.is_addressed,
+            address.reason,
+            event.mentioned_bot,
+            recent_bot_count,
+            evidence['other_addressee'],
         )
         if address.reason in {'recent_followup', 'take_request'}:
             prior = [row for row in recent if source is not None and row.id < source.id]

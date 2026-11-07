@@ -42,6 +42,51 @@ def test_sender_uses_send_group_msg() -> None:
     assert gateway.calls == [("send_group_msg", {"group_id": 10001, "message": "hello"})]
 
 
+def test_sender_sends_face_segments_for_qq_emoji_tokens() -> None:
+    # 模型照抄上下文里的 [表情：微笑] 时，要变成真正的 QQ 表情，而不是字面文字。
+    gateway = FakeGateway()
+    sender = Sender(gateway)
+    asyncio.run(
+        sender.send_group_text(OutboundMessage(group_id=10001, text="杂鱼[表情：微笑]"))
+    )
+
+    assert gateway.calls == [
+        (
+            "send_group_msg",
+            {
+                "group_id": 10001,
+                "message": [
+                    {"type": "text", "data": {"text": "杂鱼"}},
+                    {"type": "face", "data": {"id": "14"}},
+                ],
+            },
+        )
+    ]
+
+
+def test_sender_keeps_plain_string_payload_without_face_tokens() -> None:
+    gateway = FakeGateway()
+    sender = Sender(gateway)
+    asyncio.run(
+        sender.send_private_text(OutboundPrivateMessage(user_id=10001, text="没有表情"))
+    )
+
+    assert gateway.calls == [
+        ("send_private_msg", {"user_id": 10001, "message": "没有表情"})
+    ]
+
+
+def test_sender_does_not_send_a_message_made_only_of_unsendable_stickers() -> None:
+    gateway = FakeGateway()
+    sender = Sender(gateway)
+    receipts = asyncio.run(
+        sender.send_group_text(OutboundMessage(group_id=10001, text="[表情包：自定义]"))
+    )
+
+    assert gateway.calls == []
+    assert receipts == ()
+
+
 def test_sender_uses_send_private_msg() -> None:
     gateway = FakeGateway()
     sender = Sender(gateway)

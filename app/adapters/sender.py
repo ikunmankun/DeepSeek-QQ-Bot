@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.adapters.outbound_guard import GroupDispatchRevokedError, current_group_dispatch
+from app.core.at_tokens import split_at_segments
+from app.core.qq_faces import text_segments
 
 
 class QQMessageBlockedError(RuntimeError):
@@ -40,6 +42,7 @@ class OutboundPrivateMessage:
 class Sender:
     MAX_TEXT_CHUNK_LENGTH = 180
     MAX_IMAGE_BYTES = 8 * 1024 * 1024
+    MAX_VOICE_BYTES = 8 * 1024 * 1024
 
     def __init__(self, gateway) -> None:
         self.gateway = gateway
@@ -78,6 +81,48 @@ class Sender:
             },
         )
 
+    async def send_group_voice(self, *, group_id: int, voice_file: str) -> None:
+        """发一条 QQ 语音条（record 段）；NapCat 负责转码成 silk。"""
+        scope = current_group_dispatch(group_id)
+        if scope is not None and not scope.can_send():
+            raise GroupDispatchRevokedError("Group Agent stopped before QQ dispatch")
+        await self._send_once(
+            action="send_group_msg",
+            params={
+                "group_id": group_id,
+                "message": [
+                    {"type": "record", "data": {"file": self._record_file_payload(voice_file)}}
+                ],
+            },
+        )
+
+    async def send_private_voice(self, *, user_id: int, voice_file: str) -> None:
+        await self._send_once(
+            action="send_private_msg",
+            params={
+                "user_id": user_id,
+                "message": [
+                    {"type": "record", "data": {"file": self._record_file_payload(voice_file)}}
+                ],
+            },
+        )
+
+    async def send_group_at_text(self, *, group_id: int, user_id: int, text: str) -> None:
+        """@某人的文字消息（提醒/叫醒用，一条消息内 at+text）。"""
+        scope = current_group_dispatch(group_id)
+        if scope is not None and not scope.can_send():
+            raise GroupDispatchRevokedError("Group Agent stopped before QQ dispatch")
+        await self._send_once(
+            action="send_group_msg",
+            params={
+                "group_id": group_id,
+                "message": [
+                    {"type": "at", "data": {"qq": str(int(user_id))}},
+                    {"type": "text", "data": {"text": text}},
+                ],
+            },
+        )
+
     async def send_private_image(self, *, user_id: int, image_file: str) -> str | None:
         image_payload = self._image_file_payload(image_file)
         return await self._send_once(
@@ -97,7 +142,9 @@ class Sender:
         """A single acknowledged caption/image message, without partial sends."""
         if not 1 <= len(image_files) <= 2 or len(text) > 12000 or '[CQ:' in text:
             raise ValueError('invalid private media message')
-        segments = [{'type': 'text', 'data': {'text': text}}] if text else []
+        segments = self._message_field(text) if text else []
+        if isinstance(segments, str):
+            segments = [{'type': 'text', 'data': {'text': segments}}]
         segments.extend({'type': 'image', 'data': {'file': self._image_file_payload(name)}} for name in image_files)
         receipt = await self._send_once(action='send_private_msg', params={'user_id': user_id, 'message': segments})
         return (receipt,) if receipt is not None else ()
@@ -180,11 +227,25 @@ class Sender:
         """One caption/image message, one acknowledgement and one dispatch marker."""
         if max_text_chars not in {300, 12000} or not 1 <= len(image_files) <= 2 or len(text) > max_text_chars or "[CQ:" in text:
             raise ValueError("invalid group media message")
-        segments = [{"type": "text", "data": {"text": text}}] if text else []
+        segments = self._message_field(text) if text else []
+        if isinstance(segments, str):
+            segments = [{"type": "text", "data": {"text": segments}}]
         for name in image_files:
             segments.append({"type": "image", "data": {"file": self._image_file_payload(name)}})
         receipt = await self._send_once(action="send_group_msg", params={"group_id": group_id, "message": segments})
         return (receipt,) if receipt is not None else ()
+
+    @classmethod
+    def _record_file_payload(cls, name: str) -> str:
+        # 同图片：QQ 网关在另一个容器里，file:// 不可靠，一律 base64。
+        path = Path(name)
+        if not 0 < path.stat().st_size <= cls.MAX_VOICE_BYTES:
+            raise ValueError("voice exceeds send budget")
+        with path.open("rb") as stream:
+            content = stream.read(cls.MAX_VOICE_BYTES + 1)
+        if not content or len(content) > cls.MAX_VOICE_BYTES:
+            raise ValueError("voice exceeds send budget")
+        return "base64://" + base64.b64encode(content).decode("ascii")
 
     @classmethod
     def _image_file_payload(cls, name: str) -> str:
@@ -198,6 +259,10 @@ class Sender:
         if not content or len(content) > cls.MAX_IMAGE_BYTES:
             raise ValueError("image exceeds send budget")
         return "base64://" + base64.b64encode(content).decode("ascii")
+
+    async def send_group_poke(self, *, group_id: int, user_id: int) -> None:
+        """戳一戳群成员（best-effort：失败由调用方决定是否忽略）。"""
+        await self.gateway.call_api("send_group_poke", {"group_id": int(group_id), "user_id": int(user_id)})
 
     async def get_qq_avatar(self, *, user_id: int) -> str:
         response = await self._call_profile_action(
@@ -309,22 +374,59 @@ class Sender:
             or ("nodeikernelmsgservice/sendmsg" in text and "timeout" in text)
         )
 
+    @staticmethod
+    def _message_field(text: str):
+        """把模型文本转成 OneBot 消息段。
+
+        两个 token 通道在这里收口：
+        * ``[@qq:号]`` → 真正的 at 段（``[@名字]`` 已在上游解析成 QQ 号）；
+        * ``[表情：名称]`` → 真正的小黄脸段。
+        同时把 CQ 控制段字符全角化——模型的 at 只能走 token 通道，防注入；
+        媒体路径另有 ``[CQ:`` 硬闸门。
+        """
+
+        text = str(text).replace("[CQ:", "[CQ：")
+        at_segments = split_at_segments(text)
+        if at_segments is None:
+            segments = text_segments(text)
+            return text if segments is None else segments
+        final: list[dict] = []
+        for segment in at_segments:
+            if segment["type"] != "text":
+                final.append(segment)
+                continue
+            piece = segment["data"]["text"]
+            converted = text_segments(piece)
+            if converted is None:
+                if piece:
+                    final.append({"type": "text", "data": {"text": piece}})
+            else:
+                final.extend(converted)
+        return final
+
     async def _send_text_message(self, *, action: str, target_params: dict, text: str, allow_chunking: bool) -> tuple[str, ...]:
         normalized = str(text).strip()
         if allow_chunking:
             receipts = []
             for chunk in self._split_text_chunks(normalized):
+                message = self._message_field(chunk)
+                if isinstance(message, list) and not message:
+                    # 整条都是还原不了的表情包记号，发空消息会让网关报错。
+                    continue
                 receipt = await self._send_once(
                     action=action,
-                    params={**target_params, "message": chunk},
+                    params={**target_params, "message": message},
                 )
                 if receipt is not None:
                     receipts.append(receipt)
             return tuple(receipts)
 
+        message = self._message_field(normalized)
+        if isinstance(message, list) and not message:
+            return ()
         receipt = await self._send_once(
             action=action,
-            params={**target_params, "message": normalized},
+            params={**target_params, "message": message},
         )
         return (receipt,) if receipt is not None else ()
 

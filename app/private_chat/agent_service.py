@@ -34,7 +34,7 @@ from app.core.group_image_generation import PrivateImageGenerationRequest
 from app.core.image_turn_resolver import resolve_private_images_for_turn
 from app.core.memory_source_guard import is_usable_memory_source
 from app.core.message_content import ImageAttachment
-from app.core.time_utils import CONVERSATION_TIME_POLICY, conversation_time_context, shanghai_aware, stored_as_utc
+from app.core.time_utils import CONVERSATION_TIME_POLICY, conversation_time_context, shanghai_aware, shanghai_now_naive, stored_as_utc
 from app.core.url_policy import url_reply_policy_instruction
 from app.runtime.blocking import BoundedBlockingRunner
 from app.storage.agent_effects import AgentToolEffect, AgentToolEffectRepository
@@ -90,6 +90,12 @@ class PrivateHarnessService:
             from app.agent.owner_actions import OwnerActionService
             self.owner_service = OwnerActionService(self.engine, runtime=runtime, clock=self.clock)
         self.runtime_factory = runtime_factory
+        # 私聊语音：TTS 可插拔，未配 TTS_API_KEY 时 speak_private 工具不注册。
+        from app.core.voice import build_tts
+
+        self.voice_tts = build_tts(settings)
+        self._voice_usage_day = ""
+        self._voice_usage_count = 0
         self.effects = AgentToolEffectRepository(self.engine, account_id=self.account_id, clock=self.clock)
         self.sessions = AgentSessionRepository(self.engine, account_id=self.account_id,
             session_root=settings.data_dir / "agent_sessions", clock=self.clock, max_items=40, max_characters=24000)
@@ -179,6 +185,21 @@ class PrivateHarnessService:
 
     def image_input_root(self, user_id: int) -> Path:
         return (self.settings.data_dir / "image_cache" / "private" / str(self.account_id) / str(user_id)).resolve()
+
+    def _life_note_prompt_line(self) -> str:
+        """人生笔记注入：私聊和群聊共享同一段自传体长期记忆。"""
+
+        if self.engine is None:
+            return ""
+        try:
+            from app.core import life_notes
+            from app.storage.db import session_scope
+
+            with session_scope(self.engine) as session:
+                return str(life_notes.prompt_line(session, now=shanghai_now_naive()) or "")
+        except Exception:
+            logging.getLogger(__name__).exception("private_life_note_prompt_failed")
+            return ""
 
     def _owned_input_images(self, images, user_id: int, source_message_id: str):
         owned = []
@@ -836,12 +857,60 @@ class PrivateHarnessService:
             send_schema['properties']['media_artifact_ids'] = {'type': 'array', 'items': _text(64), 'minItems': 1, 'maxItems': 20, 'uniqueItems': True}
             from app.agent.request_task import delivery_properties
             send_schema['properties'].update(delivery_properties())
+
+            async def speak(args):
+                guard.require_valid()
+                text = str(args.get("text") or "").strip()
+                if not text:
+                    return ToolOutcome({"error": "empty_text"}, "blocked")
+                if len(text) > 150:
+                    return ToolOutcome({"error": "text_too_long",
+                        "guidance": "语音最多 150 字；长内容请发文字。"}, "blocked")
+                if self.voice_tts is None:
+                    return ToolOutcome({"error": "voice_unavailable"}, "blocked")
+                now_day = shanghai_now_naive().strftime("%Y-%m-%d")
+                if now_day != self._voice_usage_day:
+                    self._voice_usage_day, self._voice_usage_count = now_day, 0
+                if self._voice_usage_count >= int(getattr(self.settings, "tts_daily_limit", 20) or 20):
+                    return ToolOutcome({"error": "voice_daily_limit",
+                        "note": "今天的语音额度用完了，改发文字。"}, "blocked")
+                import tempfile
+                workdir = Path(tempfile.mkdtemp())
+                try:
+                    mp3 = await asyncio.to_thread(self.voice_tts.synthesize, text, workdir)
+                except Exception as exc:
+                    logging.getLogger(__name__).warning("private_tts_synthesize_failed error=%s", exc)
+                    return ToolOutcome({"error": "tts_failed",
+                        "note": "语音生成失败；改发文字，别提语音的事。"}, "blocked")
+                self._voice_usage_count += 1
+                await self.service.sender.send_private_voice(user_id=user_id, voice_file=str(mp3))
+                return ToolOutcome({"spoken": True, "chars": len(text),
+                    "note": "语音已发出。说得自然，像开口说话不是念稿。"})
+
+            async def record_wish(args):
+                guard.require_valid()
+                content = str(args.get("content") or "").strip()
+                from app.core import agent_agenda
+
+                with session_scope(self.engine) as session:
+                    row = agent_agenda.add_wish(session, content=content,
+                                                now=shanghai_now_naive(), origin="private-tool")
+                if row is None:
+                    return ToolOutcome({"added": False,
+                        "note": "重复愿望或愿望太多（上限5条），没重复记。"})
+                return ToolOutcome({"added": True, "wish_id": row.id,
+                    "note": "记下了，夜间汇总后主人会收到你的私信。"})
+
             tools = [AgentTool("read_private_context", "读取当前用户的日常上下文和实际图片", _schema(), context),
                 AgentTool('search_private_history','按需查询当前用户以前发来的原消息；隔离内容不可读取，重置不会删除正常存档',
                     _schema(query=_text(100)),search_private_history),
                 AgentTool('read_artifact','必要时少量确认当前用户合法静态图片；主题媒体以原帖正文判断，不逐份看图，不预览视频/动图。仅artifact_id，不接受路径，不跨用户或撤回来源',
                     _schema(artifact_id=_text(64)),read_artifact),
                 AgentTool("send_private", "向当前用户发送聊天或结果；图片普通最多2张，as_forward=true最多20张。media_artifact_ids配合as_forward=true按原顺序打包图片/视频，不与artifact_ids/video_artifact_id混用；video_artifact_id只发单视频。按真实回执判断成功", send_schema, send, "write"),
+                AgentTool("speak_private", "真的开口说话：把你要对当前用户说的话变成一条语音发过去。对方想听你声音、让你说话或唱一句时优先用它；撒娇、得意、害羞情绪到位的时刻也适合开口。像随口说话那样写——短句、口语、带语气词，别书面别念稿；最多150字。一轮最多一条，别连发。",
+                    _schema(text=_text(150)), speak, "write"),
+                AgentTool("record_wish", "记一条「想要的新功能」愿望。什么时候用：你发现自己想做某件事但没有那个能力——认不出歌、查不了东西、看不懂某类内容、记不住该记的事——当时就记下来想跟主人要什么，写清楚想要什么能力+具体场景。别记闲聊念头，只记能力缺口。攒着的愿望会私信主人。",
+                    _schema(content=_text(300)), record_wish, "write"),
                 AgentTool("generate_private_image", "通过既有私聊绘图服务异步画图；排队不是生成或发送成功", _schema(prompt=_text(2000), use_current_images={"type": "boolean"}), draw, "image"),
                 AgentTool("private_image_status", "读取当前用户绘图任务的真实状态", _schema(task_id={"type": "integer", "minimum": 1, "maximum": 2**63 - 1}), image_status),
                 AgentTool("schedule_private_wakeup", "保存当前用户的提醒/继续目标，到期唤醒Agent决定是否发送", _schema(goal=_text(500), delay_seconds={"type": "integer", "minimum": 1, "maximum": 604800}), schedule),
@@ -978,6 +1047,7 @@ class PrivateHarnessService:
             prompt = ["System persona: " + self.service._private_daily_persona_text(),
                 'Group policy: ' + serious_request_policy(),
                 'Group policy: ' + WEB_REQUEST_POLICY,
+                *filter(None, (self._life_note_prompt_line(),)),
                 *("Reply style: " + line.removeprefix("Reply style: ")
                     for line in self.service._private_reply_style_lines(private_scope=payload["private_scope"])),
                 self.service._private_daily_safety_line(),

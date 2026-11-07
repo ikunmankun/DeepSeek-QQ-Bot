@@ -94,3 +94,15 @@ configs/social.local.yaml
 *.sqlite3
 *.db-wal
 *.db-shm
+
+# 本地审计产物（含完整聊天记录导出，严禁入库）
+.analysis/
+
+# ZCode 本地工具配置
+.zcode/
+
+# .env 的时间戳备份（.env.backup* 模式盖不住 .env.bak-*）
+infra/wsl/.env.bak*
+
+# 表情库是卷挂载的运行资产（~94MB 网络图源），不进代码仓
+memes/

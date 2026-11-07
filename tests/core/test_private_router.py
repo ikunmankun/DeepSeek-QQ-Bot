@@ -166,7 +166,7 @@ async def test_router_persists_private_images_and_forwards_cached_event(sqlite_e
         del cache_dir, http_client
         raw_payload["message"][1]["data"]["local_path"] = str(tmp_path / "private-cat.png")
 
-    monkeypatch.setattr(router_module, "cache_images_in_raw_payload", fake_cache)
+    monkeypatch.setattr("app.core.router.ingest.cache_images_in_raw_payload", fake_cache)
 
     event = make_private_event(
         user_id=10001,

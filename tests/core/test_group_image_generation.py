@@ -14,6 +14,8 @@ from PIL import Image
 from sqlalchemy import text
 
 from app.core.group_image_generation import (
+    LANDSCAPE_IMAGE_SIZE,
+    PORTRAIT_IMAGE_SIZE,
     GroupImageGenerationRequest,
     GroupImageGenerationService,
     PrivateImageGenerationRequest,
@@ -458,7 +460,8 @@ async def test_group_image_service_uses_max_landscape_size_when_prompt_mentions_
     await service.wait_for_idle()
 
     assert result.accepted is True
-    assert llm.generate_calls[0]["size"] == "1536x1024"
+    # 断言模块常量而不是写死分辨率：横竖图档位可随后端调整。
+    assert llm.generate_calls[0]["size"] == LANDSCAPE_IMAGE_SIZE
     assert llm.generate_calls[0]["quality"] == "high"
 
 
@@ -490,7 +493,7 @@ async def test_group_image_service_uses_max_portrait_size_when_prompt_mentions_p
 
     assert result.accepted is True
     assert llm.generate_calls == []
-    assert llm.edit_calls[0]["size"] == "1024x1536"
+    assert llm.edit_calls[0]["size"] == PORTRAIT_IMAGE_SIZE
     assert llm.edit_calls[0]["quality"] == "high"
 
 

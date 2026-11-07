@@ -29,7 +29,7 @@ _READS={'search_web','open_web_page','find_web_page','inspect_web_resources','li
         'download_web_image','download_web_images','download_web_video','download_twitter_media','read_self_activity','search_x_posts','search_xhs_posts'}
 _ARTIFACT_TOOLS={'download_web_image','download_web_images','download_web_video','download_twitter_media',
                  'read_artifact','media_result','generate_image','generate_private_image',
-                 'search_image_references','execute_python','list_artifacts',
+                 'search_image_references','execute_python','list_artifacts','pick_sticker',
                  'observe_group_images','observe_forward_images','observe_post_images'}
 _DOWNLOAD_TOOLS={'download_twitter_media','download_web_images','download_web_video'}
 _REQUIREMENTS={'source_evidence','primary_source','media_delivery'}

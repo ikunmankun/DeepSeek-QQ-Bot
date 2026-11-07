@@ -20,8 +20,12 @@ def test_render_persona_matches_expected_template() -> None:
 
     text = render_persona(persona)
 
+    # 本机补丁把渲染从单行摘要改成逐行细节（便于模型按条理解），
+    # 断言随之更新到新格式。
     assert text == (
-        "You are Mira. Identity: AI assistant. Core traits: calm, curious. "
+        "You are Mira.\n"
+        "Identity: AI assistant。\n"
+        "Core traits: calm；curious。\n"
         "Speaking tone: natural."
     )
 
@@ -37,7 +41,9 @@ def test_render_persona_accepts_scalar_traits_and_missing_style() -> None:
     text = render_persona(persona)
 
     assert text == (
-        "You are Mira. Identity: AI assistant. Core traits: calm. "
+        "You are Mira.\n"
+        "Identity: AI assistant。\n"
+        "Core traits: calm。\n"
         "Speaking tone: natural."
     )
 
@@ -171,8 +177,9 @@ def test_render_persona_includes_background_and_example_lines() -> None:
     text = render_persona(persona)
 
     assert "Background: 在快手实习，关心秋招" in text
-    assert "「我玩」" in text
-    assert "「真尿了」" in text
+    # 例句现在是逐行片段（带引导语），不再是「A→B」式的台词清单
+    assert "\n  我玩" in text
+    assert "\n  真尿了" in text
 
 
 def test_render_persona_caps_example_lines() -> None:
@@ -186,9 +193,9 @@ def test_render_persona_caps_example_lines() -> None:
 
     text = render_persona(persona)
 
-    assert "「第0条」" in text
-    assert "「第15条」" in text
-    assert "「第29条」" not in text
+    assert "\n  第0条" in text
+    assert "\n  第15条" in text
+    assert "\n  第29条" not in text
 
 
 def test_render_persona_keeps_a_required_default_style_contract() -> None:

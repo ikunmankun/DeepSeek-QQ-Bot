@@ -291,6 +291,96 @@ class Job(Base):
     target_generation: Mapped[str] = mapped_column(String(128), default="", server_default="")
 
 
+class GroupMoodState(Base):
+    """每群一份的运行时情绪状态（规则版）。
+
+    事件触发（被夸/被怼/求助）抬升 intensity 并切换 mood，读取时按
+    half-life 惰性衰减回 ambient（夜间 sleepy / 平时 default）。每群一行。
+    """
+
+    __tablename__ = "group_mood_states"
+
+    group_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    mood: Mapped[str] = mapped_column(String(32), default="default")
+    intensity: Mapped[float] = mapped_column(Float, default=0.0)
+    reason: Mapped[str] = mapped_column(String(160), default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(ASIA_SHANGHAI).replace(tzinfo=None),
+    )
+
+
+class UserAffinityState(Base):
+    """每群每人的好感度（规则版，麦麦式关系系统的轻量实现）。
+
+    被夸/求助/日常互动加分，被怼小扣分；读取时按半衰期（约 14 天）向 0
+    衰减。分数只用来定性（陌生/认识/熟人/老朋友），不搞数值化的亲密表演。
+    """
+
+    __tablename__ = "user_affinity_states"
+
+    group_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    interactions: Mapped[int] = mapped_column(Integer, default=0)
+    last_event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(ASIA_SHANGHAI).replace(tzinfo=None),
+    )
+
+
+class GroupSlangTerm(Base):
+    """群黑话/高频词（slang learning 落表，prompt 注入用）。"""
+
+    __tablename__ = "group_slang_terms"
+
+    group_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    term: Mapped[str] = mapped_column(String(32), primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    last_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(ASIA_SHANGHAI).replace(tzinfo=None),
+    )
+
+
+class AgentAgendaItem(Base):
+    """agent 自己的日程/待办（夜间反思生成，观察轮推进）。"""
+
+    __tablename__ = "agent_agenda_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(16), default="todo")      # todo | curiosity
+    content: Mapped[str] = mapped_column(String(300))
+    source: Mapped[str] = mapped_column(String(16), default="self")    # self | owner
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)  # pending | done | dropped
+    group_id: Mapped[int] = mapped_column(Integer, default=0)          # 0 = 通用
+    note: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(ASIA_SHANGHAI).replace(tzinfo=None),
+    )
+    done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AgentProject(Base):
+    """agent 的长时程自主项目：跨天推进、有交付物。"""
+
+    __tablename__ = "agent_projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(120))
+    plan: Mapped[str] = mapped_column(String(600), default="")
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)  # active | done | shelved
+    deliverable: Mapped[str] = mapped_column(String(400), default="")
+    work_log: Mapped[list] = mapped_column(JSON, default=list)  # [{date, note}]
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(ASIA_SHANGHAI).replace(tzinfo=None),
+    )
+    last_worked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class ConversationEpisode(Base):
     __tablename__ = "conversation_episodes"
     __table_args__ = (
@@ -657,3 +747,115 @@ class DevTaskArtifact(Base):
     artifact_type: Mapped[str] = mapped_column(String(64))
     artifact_path: Mapped[str] = mapped_column(Text)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class PersonaTraitCandidate(Base):
+    """特质证据表：人格特质经"多次跨天证据"确认后才能进入提示词。
+
+    证据制人格进化（对照 dsh-identity 的思路）：特质不是设定出来的，是从
+    行为记录里长出来的——一条候选特质必须被证据命中至少 PROMOTION 次、
+    且证据跨至少 PROMOTION_SPAN_DAYS 天，才从 candidate 晋升为 confirmed。
+    证据来源是机器人自己的日记与关于其行为的记忆，由周期 worker 用 LLM
+    归纳；这里只存结论与计数。
+    """
+
+    __tablename__ = "persona_trait_candidates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # 归一化指纹（去空白小写后的摘要），用来把同一特质的不同措辞合并计数。
+    trait_key: Mapped[str] = mapped_column(String(64), unique=True)
+    display_text: Mapped[str] = mapped_column(String(120))
+    origin: Mapped[str] = mapped_column(String(24), default="diary")
+    evidence_count: Mapped[int] = mapped_column(Integer, default=1)
+    evidence_json: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(16), default="candidate", index=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class GroupInterjectionOutcome(Base):
+    """主动插话的结果记录（沉默学习）。
+
+    每次机器人主动插话（judge 批准的 proactive 回复）落一行 pending，
+    周期 worker 在观察窗口过后回填结果：有人接话 responded、被怼 negative、
+    没人理 ignored、没发出去 not_sent。按群 × 时段聚合出"什么时候插话
+    没人接"，长期喂给插话判定当参考。
+    """
+
+    __tablename__ = "group_interjection_outcomes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id: Mapped[int] = mapped_column(Integer, index=True)
+    bot_msg_id: Mapped[str] = mapped_column(String(128), unique=True)
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    hour_bucket: Mapped[int] = mapped_column(Integer)
+    outcome: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class BilibiliGroupInterest(Base):
+    """群的 B 站兴趣画像：按视频分区聚合，随时间衰减。
+
+    群友分享过什么视频，机器人就慢慢知道这个群在看什么——
+    分区（tname）计分，读取时按半衰期向 0 衰减，久没人聊的口味自然淡出。
+    """
+
+    __tablename__ = "bilibili_group_interests"
+
+    group_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    zone: Mapped[str] = mapped_column(String(48), primary_key=True)
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    share_count: Mapped[int] = mapped_column(Integer, default=0)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Reminder(Base):
+    """提醒/闹钟：到点在群里 @人（或私聊），没人应就贪睡式再催。
+
+    一次性（once）催满 max_nags 次没人理就放弃；每天（daily）的催完一轮
+    自动顺延到明天同一时刻继续。channel=group 走群 @，private 走私聊。
+    """
+
+    __tablename__ = "reminders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    channel: Mapped[str] = mapped_column(String(16), default="group")
+    content: Mapped[str] = mapped_column(String(200), default="")
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    repeat: Mapped[str] = mapped_column(String(16), default="once")
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    nag_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_nags: Mapped[int] = mapped_column(Integer, default=2)
+    next_nag_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class LifeNote(Base):
+    """人生笔记：bot 的自传体长期记忆。
+
+    事实层记忆（memory_items）会衰减、会过期，日记是散落的文件——
+    这里是夜间反思把"这段时间发生了什么、我们的交情走到哪了"凝练成的
+    叙事条目：只增不灭、全局共享（群+私聊是同一个人格）。供提示注入
+    与 FTS/向量检索，是"越聊越像老朋友"的那一层。
+    """
+
+    __tablename__ = "life_notes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    period: Mapped[str] = mapped_column(String(64), default="")          # 如 2026-W45
+    kind: Mapped[str] = mapped_column(String(16), default="milestone")   # relationship|running_joke|group_history|self_growth|promise|milestone
+    title: Mapped[str] = mapped_column(String(120), default="")
+    content: Mapped[str] = mapped_column(Text, default="")
+    sources: Mapped[list] = mapped_column(JSON, default=list)            # 日记日期 / memory_item id 等出处
+    source_groups: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)  # active|superseded
+    embedding_provider: Mapped[str] = mapped_column(String(64), default="")
+    embedding_model: Mapped[str] = mapped_column(String(64), default="")
+    embedding_dimensions: Mapped[int] = mapped_column(Integer, default=0)
+    embedding_version: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

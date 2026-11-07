@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 import logging
 from pathlib import Path
+import random
 
 from sqlalchemy import func, and_, select
 
@@ -17,6 +18,8 @@ from app.adapters.qzone import QzoneRejectedError, QzoneUnavailableError
 from app.agent.social_contracts import SocialDecision, SocialObservation, SocialResult
 from app.agent.social_policy import (autonomous_social_enabled, configured_social_jobs,
                                      in_quiet_hours, friend_authorized, resolve_friend_ids)
+from app.core.chat_style import (burst_delays, build_reply_split_config, split_burst_reply,
+                                 typing_delay_seconds)
 from app.core.memory_source_guard import is_usable_memory_source
 from app.core.time_utils import ASIA_SHANGHAI
 from app.storage.db import session_scope
@@ -34,6 +37,27 @@ class SocialExecutor:
         self.sender = sender
         self.qzone = qzone_adapter
         self.clock = clock or (lambda: datetime.now(UTC))
+
+    def _resolve_at_tokens(self, group_id: int, text: str) -> str:
+        """[@名字] → [@qq:N]；解析失败降级为纯文本名字（丢 @ 保正文）。"""
+
+        if "[@" not in text:
+            return text
+        try:
+            from app.core.at_tokens import resolve_at_names, strip_at_tokens
+            from app.core.member_identity import group_member_identities_from_messages
+
+            with session_scope(self.router.engine) as session:
+                member_messages = MessageRepository(session).list_recent_group_member_messages(
+                    group_id=group_id, limit=200)
+            members = group_member_identities_from_messages(
+                member_messages, target_group_id=group_id)
+            return resolve_at_names(text, members=members)
+        except Exception:
+            logger.warning("at_token_resolve_failed", exc_info=True)
+            from app.core.at_tokens import strip_at_tokens
+
+            return strip_at_tokens(text)
 
     def policy_check(self, observation: SocialObservation, decision: SocialDecision, *, reserved_action_id=None, read_only=False,
                      owner_authority=None) -> bool:
@@ -284,7 +308,30 @@ class SocialExecutor:
                     receipts = await self.sender.send_group_media(group_id=observation.job.scope_id, text=decision.text,
                         image_files=decision.image_files, **caption_options)
                 else:
-                    receipts = await self.sender.send_group_text(OutboundMessage(observation.job.scope_id, decision.text))
+                    # 拟人化发送：harness 路径与 legacy 聊天回复共用同一套
+                    # 系统级分段策略（build_reply_split_config）。聊天长度的
+                    # 回复拆成短消息连发、段间随机停顿模拟打字节奏；带换行的
+                    # 结构化内容和拆完仍超长的报告保持整发，切碎反而更假。
+                    at_text = self._resolve_at_tokens(observation.job.scope_id, decision.text)
+                    burst = build_reply_split_config(self.router.runtime.settings)
+                    segments = split_burst_reply(at_text, burst)
+                    if len(segments) > 1 and ("\n" in decision.text
+                            or max(map(len, segments)) > burst["max_chars"] * 2):
+                        segments = [decision.text]
+                    segments = segments or [decision.text]
+                    # 拟人节奏：真人不会在消息落地瞬间就开口——读完、想一下、
+                    # 再把字打出来。发第一段前按配置停顿；默认 0（关闭），
+                    # 段间节奏仍由 burst delay 负责。
+                    typing_delay = typing_delay_seconds(self.router.runtime.settings, decision.text)
+                    if typing_delay > 0:
+                        await asyncio.sleep(typing_delay)
+                    delay_min, delay_max = burst_delays(burst, segment_count=len(segments))
+                    receipts = ()
+                    for index, segment in enumerate(segments):
+                        receipts = receipts + await self.sender.send_group_text(
+                            OutboundMessage(observation.job.scope_id, segment))
+                        if index < len(segments) - 1 and delay_max > 0:
+                            await asyncio.sleep(random.uniform(delay_min, delay_max))
             if not receipts:
                 raise QQMessageDeliveryUncertainError("scheduled send has no receipt")
             self._finish_group_output(provisional_id, state="sent", receipt=receipts[0])

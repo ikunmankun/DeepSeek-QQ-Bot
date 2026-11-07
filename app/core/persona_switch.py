@@ -59,7 +59,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_PERSONA_KEY = "default"
 ACCOUNT_STATE_GROUP_ID = 0
 
-_SWITCH_COMMAND_PATTERN = re.compile(r"^切换人格为\s*[:：]\s*(?P<target>.+?)\s*$")
+_DEFAULT_WORDS = frozenset({"默认", "原版", "原本", "原来的"})
+
+# 触发词从死的"切换人格为:X"放宽成现代口语：人格/人设都认，切换/换/变都行，
+# 冒号、顿号、逗号、空格都能隔开目标；目标可以缺省（主人想先看看有谁）。
+_SWITCH_COMMAND_PATTERN = re.compile(
+    r"^(?:切换|换|变)个?(?:人格|人设)(?:为|成|到)?[:：、,，\s]*(?P<target>.*?)\s*$"
+)
 
 
 def persona_aliases(persona: dict) -> set[str]:
@@ -85,19 +91,33 @@ def persona_aliases(persona: dict) -> set[str]:
     return aliases
 
 
-def parse_switch_command(text: str, personas: dict[str, dict]) -> str | None:
-    """Resolve ``切换人格为:X`` to a persona key, or None when not a command."""
+def match_switch_command(text: str) -> str | None:
+    """识别切换指令；是指令就返回目标原文（可能为空串），不是返回 None。"""
 
     match = _SWITCH_COMMAND_PATTERN.match(str(text or "").strip())
     if match is None:
         return None
-    target = str(match.group("target") or "").strip().lower()
-    if not target:
+    return str(match.group("target") or "").strip()
+
+
+def resolve_switch_target(target: str, personas: dict[str, dict]) -> str | None:
+    """把目标原文解析成人格 key；空串或没命中返回 None。"""
+
+    normalized = str(target or "").strip().lower()
+    if not normalized:
         return None
     for key, persona in personas.items():
-        if target in persona_aliases(persona):
+        if normalized in persona_aliases(persona):
             return key
+    if normalized in _DEFAULT_WORDS:
+        return DEFAULT_PERSONA_KEY
     return None
+
+
+def parse_switch_command(text: str, personas: dict[str, dict]) -> str | None:
+    """Resolve a switch command to a persona key, or None when not a command."""
+
+    return resolve_switch_target(match_switch_command(text) or "", personas)
 
 
 class PersonaManager:

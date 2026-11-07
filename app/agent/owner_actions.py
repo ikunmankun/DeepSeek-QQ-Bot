@@ -25,7 +25,7 @@ from app.storage.models import Job, Message
 from app.storage.repositories import JobRepository
 
 logger = logging.getLogger(__name__)
-OWNER_CONTROL_TOOLS = frozenset({'remember_intention', 'save_work_note', 'generate_image', 'generate_private_image',
+OWNER_CONTROL_TOOLS = frozenset({'remember_intention', 'save_work_note', 'read_diary', 'bili_login_qr', 'agent_agenda', 'agent_project', 'generate_image', 'generate_private_image',
     'execute_python', 'memory_write', 'request_persona_refresh', 'schedule_wakeup', 'cancel_wakeup',
     'schedule_private_wakeup', 'cancel_private_wakeup', 'set_nickname', 'set_avatar', 'set_group_card', 'set_group_persona'})
 
@@ -35,9 +35,15 @@ def restrict_directed_tools(tools, *, owner, allow_group_images=False):
         return tools
     async def denied(args):
         return ToolOutcome({'error': 'owner_required'}, 'blocked')
+    # pick_sticker 只是本地只读表情库取图，零成本零风险；投递权限由
+    # send_group/send_private 把关。斗图对象是非主人群友时也必须可用，
+    # 否则模型取不到图只能编"图库空了"之类的说辞圆场。
+    # speak_private 同理：语音条就是一次普通投递，权限由 access policy 把关。
+    # record_wish 是 bot 的自我表达（想跟主人要什么功能），谁聊都记。
     return [tool if (allow_group_images and tool.name == 'generate_image' and tool.effect == 'image')
+        or tool.name == 'pick_sticker'
         or (tool.name not in OWNER_CONTROL_TOOLS
-            and (tool.effect not in {'image', 'write'} or tool.name in {'send_group', 'send_private'}))
+            and (tool.effect not in {'image', 'write'} or tool.name in {'send_group', 'send_private', 'speak_private', 'record_wish'}))
         else replace(tool, handler=denied, authorization=lambda: False) for tool in tools]
 
 

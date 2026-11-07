@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Literal, Mapping, Protocol, Sequence
 
-from app.core.time_utils import stored_as_utc
+from app.core.memory_decay import is_faded, is_immutable, memory_age_days
+from app.core.time_utils import shanghai_now_naive, stored_as_utc
 
 
 _CJK = re.compile(r"[\u4e00-\u9fff]+")
@@ -430,6 +432,7 @@ def rank_member_facts(
     preferred_kinds: Sequence[str] = (),
     semantic_scores: Mapping[int, float] | None = None,
     recency_boost: bool = False,
+    now: datetime | None = None,
 ) -> list[RankableMemoryFact]:
     """Rank member facts by query relevance, then importance/confidence.
 
@@ -439,9 +442,14 @@ def rank_member_facts(
     facts outrank unmatched ones. With ``recency_boost`` (temporal questions),
     the freshest facts outrank older facts; otherwise importance, confidence
     and id break ties deterministically.
+
+    淡忘的记忆（memory_decay.is_faded：长期未被提起、强度跌破 50%）且当前
+    查询没直接命中时，排在所有同层新鲜事实之后——闲聊自动回忆优先想起
+    近期的事；显式问起（查询词命中内容）不受影响，"被一提醒就想起来"。
     """
     if limit <= 0:
         return []
+    decay_now = now or shanghai_now_naive()
     normalized_features = tuple(
         dict.fromkeys(str(value) for value in query_features if str(value).strip())
     )
@@ -456,6 +464,7 @@ def rank_member_facts(
         tuple[
             bool,
             bool,
+            int,
             float,
             tuple[float, float],
             float,
@@ -474,11 +483,22 @@ def rank_member_facts(
         kind = str(getattr(fact, "memory_kind", "") or "").strip()
         semantic = normalized_semantic.get(int(fact.id or 0), 0.0)
         recency = _recency_value(fact)
+        # 淡忘且未命中：闲聊时沉底，显式问起（命中）不衰减。
+        # 完全没有时间戳的记忆无法证明新鲜度，未命中时同样沉底（但
+        # memory_decay 的归档线永远不会碰它们）。豁免类永不沉底。
+        # 沉底只放在语义之后：语义强相关的旧记忆仍会浮上来（"这话题
+        # 我们聊过"）；排序是 reverse=True 降序，新鲜=1、淡忘=0。
+        undated = memory_age_days(fact, decay_now) is None
+        stale_penalty = 0 if (
+            not matched and not is_immutable(fact)
+            and (is_faded(fact, decay_now) or undated)
+        ) else 1
         scored.append(
             (
                 kind in preferred,
                 matched,
                 semantic,
+                stale_penalty,
                 (
                     recency if recency_boost else 0.0,
                     float(fact.importance or 1),
@@ -493,15 +513,16 @@ def rank_member_facts(
         key=lambda item: (
             item[0],
             item[2],
-            item[1],
             item[3],
+            item[1],
             item[4],
             item[5],
             item[6],
+            item[7],
         ),
         reverse=True,
     )
-    return [item[7] for item in scored[: int(limit)]]
+    return [item[8] for item in scored[: int(limit)]]
 
 
 def select_temporal_current_facts(

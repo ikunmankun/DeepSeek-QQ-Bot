@@ -5,6 +5,8 @@ from datetime import datetime
 import logging
 import re
 
+from app.core.time_utils import shanghai_aware
+
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +31,9 @@ def build_topic_judge_prompt(
         if message and message.strip()
     ]
     joined_recent = "\n".join(recent)
-    local_now = now.astimezone()
+    # 用项目统一时区而不是进程本地时区：容器不设 TZ 时会退化成 UTC，
+    # 让同样的 now 在不同宿主机上渲染出不同时间。
+    local_now = shanghai_aware(now)
     return [
         "System persona: You segment a QQ group chat log into topics.",
         "Safety rules: Reply with exactly two lines in this grammar: TOPIC: same|different / REASON: <one short line>. Do not add anything else.",

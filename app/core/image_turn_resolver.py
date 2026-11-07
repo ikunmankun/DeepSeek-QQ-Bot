@@ -169,6 +169,25 @@ def _recent_group_messages_before_event(*, event, messages, window: timedelta) -
     ]
 
 
+def _recent_group_images(*, event, messages, window: timedelta, limit: int = 1) -> list[ImageAttachment]:
+    """Newest images posted in this group within the window, at most ``limit``.
+
+    Only used when a group opts in to being looked at without a mention, so the
+    bot can follow a picture nobody pointed it at instead of replying blind.
+    """
+    try:
+        rows = _recent_group_messages_before_event(event=event, messages=messages, window=window)
+    except (AttributeError, TypeError):
+        return []
+    found: list[ImageAttachment] = []
+    for message in reversed(rows):
+        for image in _extract_message_images(message):
+            found.append(image)
+            if len(found) >= limit:
+                return found
+    return found
+
+
 def _recent_private_messages_before_event(*, event, messages, window: timedelta) -> list[object]:
     since = _normalize_timestamp(event.timestamp) - window
     recent_messages = messages.list_recent_private_messages_for_user_since(
@@ -233,6 +252,7 @@ def resolve_images_for_turn(
     quoted_raw_payload: dict | None = None,
     lookback_window: timedelta = timedelta(minutes=3),
     allow_recent_image_without_intent: bool = False,
+    allow_unaddressed_images: bool = False,
 ) -> ResolvedImageTurn | None:
     prior_messages = _recent_user_messages_before_event(
         event=event,
@@ -253,6 +273,14 @@ def resolve_images_for_turn(
             bot_names=bot_names,
         )
         if open_prompt is None:
+            # Group opt-in: this message carries an image but nobody addressed
+            # the bot, so read the picture instead of dropping it.
+            if allow_unaddressed_images:
+                return ResolvedImageTurn(
+                    images=event.images,
+                    source_msg_id=event.platform_msg_id,
+                    source_kind="current",
+                )
             return None
         return ResolvedImageTurn(
             images=event.images,
@@ -273,6 +301,19 @@ def resolve_images_for_turn(
         and addressed_turn
         and event.reply_to_msg_id is None
     ):
+        # Group opt-in: nobody asked the bot about a picture, but the recent
+        # chatter contains one. Attach the newest so a reply is not blind.
+        recent_group_images = (
+            _recent_group_images(event=event, messages=messages,
+                                 window=timedelta(minutes=5), limit=1)
+            if allow_unaddressed_images else []
+        )
+        if recent_group_images:
+            return ResolvedImageTurn(
+                images=recent_group_images,
+                source_msg_id="recent-group-image",
+                source_kind="recent",
+            )
         return None
 
     if event.reply_to_msg_id is not None:

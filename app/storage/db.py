@@ -147,6 +147,7 @@ def create_all(engine: Engine) -> None:
     _initialize_optional_memory_fts(engine)
     _initialize_optional_retrieval_fts(engine)
     _initialize_optional_memory_vectors(engine)
+    _initialize_life_note_indexes(engine)
 
 
 def _run_schema_migrations(engine: Engine) -> None:
@@ -689,6 +690,57 @@ def _initialize_optional_memory_vectors(
                             )
                         ),
                     },
+                )
+        return True
+    except (SQLAlchemyError, ValueError):
+        return False
+
+
+def _initialize_life_note_indexes(engine: Engine, *, dimensions: int = 512) -> bool:
+    """人生笔记的 FTS 与向量旁表（rebuildable accelerator，可整体重建）。
+
+    vec 维度固定为当前 embedding 提供商的输出维度；换提供商导致维度
+    不符时写入侧会跳过 vec 同步、检索退化为纯 FTS，不阻塞启动。
+    """
+
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("SELECT vec_version()"))
+            connection.execute(
+                text(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS life_notes_fts "
+                    "USING fts5(content, title UNINDEXED, note_id UNINDEXED, tokenize='trigram')"
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS life_notes_vec "
+                    f"USING vec0(note_id INTEGER PRIMARY KEY, embedding float[{int(dimensions)}])"
+                )
+            )
+            # 补齐 FTS 缺口（新增/重建后）。
+            existing_fts_ids = {
+                str(row[0])
+                for row in connection.execute(
+                    text("SELECT note_id FROM life_notes_fts")
+                ).fetchall()
+            }
+            missing = [
+                (content, title, str(note_id))
+                for note_id, content, title in connection.execute(
+                    text(
+                        "SELECT id, content, title FROM life_notes WHERE status = 'active'"
+                    )
+                ).fetchall()
+                if str(note_id) not in existing_fts_ids
+            ]
+            for content, title, note_id in missing:
+                connection.execute(
+                    text(
+                        "INSERT INTO life_notes_fts (content, title, note_id) "
+                        "VALUES (?, ?, ?)"
+                    ),
+                    (str(content or ""), str(title or ""), note_id),
                 )
         return True
     except (SQLAlchemyError, ValueError):

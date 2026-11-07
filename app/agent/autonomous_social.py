@@ -158,6 +158,7 @@ class AutonomousSocialExecutor:
         self.repository = AutonomousRepository(router.engine, account_id=router.runtime.settings.bot_qq, clock=self.clock)
         self.blocking = BoundedBlockingRunner(router.runtime.settings.group_agent_max_concurrent_turns if router.runtime.settings.agent_runtime == "harness" else 1)
         self.runtime_blocking = BoundedBlockingRunner(router.runtime.settings.group_agent_max_concurrent_turns)
+
         self.factories = []
         self.runtime_mode = router.runtime.settings.agent_runtime
         self.sessions = AgentSessionRepository(router.engine,
@@ -210,6 +211,20 @@ class AutonomousSocialExecutor:
         outcome = await generate(payload['arguments'])
         guard.require_valid()
         return media_result(outcome, payload)
+
+    def _author_label_for(self, user_id: int, group_id: int) -> str | None:
+        """群成员当前显示名（群名片/昵称）；解析不到返回 None。
+
+        给 agent 的观察上下文用——只给裸 QQ 号的话，模型写日记就是
+        "1234567890那人"这种称呼。
+        """
+        manager = getattr(self.router, 'persona_manager', None)
+        if manager is None:
+            return None
+        try:
+            return manager.member_label_for_user(int(user_id), int(group_id))
+        except Exception:
+            return None
 
     def _research_authorized(self, payload):
         gateway = getattr(self.qzone, 'gateway', None)
@@ -597,7 +612,9 @@ class AutonomousSocialExecutor:
                         raise RuntimeError("current_target_unavailable")
                     observed_sources.add(target.id)
                     current_target = {"message_id": target.platform_msg_id, "source_id": target.id,
-                        "author_id": target.user_id, "text": share_context_text(target.raw_json, target.plain_text),
+                        "author_id": target.user_id,
+                        "author_label": self._author_label_for(target.user_id, job.scope_id) or str(target.user_id),
+                        "text": share_context_text(target.raw_json, target.plain_text),
                         "timestamp": shanghai_aware(target.timestamp).isoformat(timespec="seconds")}
                     from app.agent.shared_links import authored_request_text
                     current_request_text = authored_request_text(target.raw_json,target.plain_text)
@@ -610,7 +627,9 @@ class AutonomousSocialExecutor:
                             turn_sources.append(quoted.id)
                             observed_sources.add(quoted.id)
                             current_target["quoted_message"] = {"message_id": quoted.platform_msg_id,
-                                "source_id": quoted.id, "author_id": quoted.user_id, "text": share_context_text(quoted.raw_json, quoted.plain_text),
+                                "source_id": quoted.id, "author_id": quoted.user_id,
+                                "author_label": self._author_label_for(quoted.user_id, job.scope_id) or str(quoted.user_id),
+                                "text": share_context_text(quoted.raw_json, quoted.plain_text),
                                 "timestamp": shanghai_aware(quoted.timestamp).isoformat(timespec="seconds")}
                         else:
                             current_target["quoted_message_unavailable"] = True
@@ -866,6 +885,16 @@ class AutonomousSocialExecutor:
                   "Group policy: 这是连续运行中的一次唤醒，可延续自己的目标，也可发现新兴趣或保持安静。工具是能力清单，没有预设执行顺序。只有确有价值时才发送；禁止CQ控制片段。公开空间只能使用自己的公开兴趣，不能引用群聊或私聊资料。"]
         if persona_guidance:
             prompt.append('Current persona guidance:\n' + persona_guidance)
+        if job.kind == "group":
+            # 插件注册表的提示行（当前情绪等）：语气由人设 mood 段决定。
+            registry = getattr(self.router, "plugin_registry", None)
+            if registry is not None:
+                target_user_id = int(current_target["source_id"]) if current_target else None
+                for hook_line in registry.prompt_lines(
+                        kind=job.kind, group_id=job.scope_id,
+                        now=observation.now, observing=observing,
+                        target_user_id=target_user_id):
+                    prompt.append(hook_line)
         if job.patrol_interval_seconds is not None and not owner_command:
             prompt.append("Group policy: 这是一次随机日间空间巡检，额度只是上限，完全允许今天不发布或不评论。"
                 "有明确想分享的原创内容才发布；好友有新动态且你有具体、贴合内容的回应才评论。"
@@ -875,6 +904,18 @@ class AutonomousSocialExecutor:
             from app.agent.participation_feedback import PROACTIVE_PARTICIPATION_RULES
             prompt.append('Group policy: ' + PROACTIVE_PARTICIPATION_RULES
                 if not direct_group_reply else "Group policy: 这是对你的直接互动。请回应当前真实目标；对外回复必须调用send_group，内部最终文字不会发到QQ。")
+        if (job.kind == "group" and observing and not owner_command
+                and getattr(self.router.runtime.settings, "silence_learning_enabled", False)):
+            # 沉默学习（harness）：legacy 在 reply.py 硬闸，这里把同样的
+            # 闸门和成绩线带进观察轮提示——冷场时段直接禁言，平时给成绩参考。
+            from app.core.social_learning import silence_gate
+
+            gate = silence_gate(self.router.engine, group_id=job.scope_id, now=observation.now)
+            if not gate.allowed:
+                prompt.append("Group policy: 沉默闸门生效（" + (gate.reason or "这个时段插话经常没人接")
+                    + "）：这轮不要往群里发任何消息，安静待着。")
+            elif gate.stats_line:
+                prompt.append("Group policy: " + gate.stats_line)
         if observing:
             from app.agent.patrol_context import PATROL_POLICY
             prompt.append('Current persona guidance:\n' + PATROL_POLICY)
@@ -932,7 +973,9 @@ class AutonomousSocialExecutor:
                     return ToolOutcome({"error": "source_budget_exhausted"}, "blocked")
                 observed_sources.update(r.id for r in rows)
                 return ToolOutcome({"messages": [{"source_id": r.id, "message_id": r.platform_msg_id,
-                      "author_id": r.user_id, "text": r.plain_text[:700],
+                      "author_id": r.user_id,
+                      "author_label": self._author_label_for(r.user_id, job.scope_id) or str(r.user_id),
+                      "text": r.plain_text[:700],
                       "timestamp": shanghai_aware(r.timestamp).isoformat(timespec="seconds")} for r in rows]})
 
         async def submit_media(operation, args, candidates=None):
@@ -1132,6 +1175,16 @@ class AutonomousSocialExecutor:
                     logger.warning('research_delivery_checkpoint_unavailable')
             if result.status == 'sent':
                 delivered_texts.append(args['text'][:4000])
+                # 沉默学习：harness 路径也登记主动插话（legacy 在 reply.py 登记）。
+                # 只记纯文字群发；直接回应和主人指令不算"主动插话"。
+                if (job.kind == "group" and not direct_group_reply and not owner_command
+                        and not media and not bundle and not as_forward and not video_path
+                        and getattr(self.router.runtime.settings, "silence_learning_enabled", False)):
+                    from app.core.social_learning import record_interjection
+                    from app.core.time_utils import shanghai_now_naive
+
+                    record_interjection(self.router.engine, group_id=job.scope_id,
+                        bot_msg_id=result.receipt_id, sent_at=shanghai_now_naive())
             details = {"result": result.status}
             if result.status != 'sent':
                 details.update(error=result.reason or 'group_send_failed',
@@ -1215,7 +1268,7 @@ class AutonomousSocialExecutor:
                 "items": text_schema(64), "maxItems": 4, "uniqueItems": True}, reference_subjects={"type": "array",
                 "items": text_schema(80, 0), "maxItems": 4})
             parameters["required"] = ["prompt"]
-            tools.append(AgentTool("generate_image", "后台生成真实作品或按reference_artifact_ids编辑真实图，reference_subjects标角色。交互时立即返回任务编号，完成后回传产物；排队不是完成，不重复排队。参考失效或编辑失败不降级文生图", parameters, generate, "image"))
+            tools.append(AgentTool("generate_image", "后台生成真实作品或按reference_artifact_ids编辑真实图，reference_subjects标角色。交互时立即返回任务编号，完成后回传产物；排队不是完成，不重复排队。参考失效或编辑失败不降级文生图。prompt必须写成英文逗号分隔的视觉关键词（画风/人物/动作/构图/背景/光线），不要把中文句子或对话原文塞进去：SD系列的文本编码器只认英文，中文会让画面完全跑偏", parameters, generate, "image"))
             if callable(getattr(getattr(self.image_service, "web_search_client", None), "image_search", None)):
                 tools.append(AgentTool("search_image_references", "自主选择查询公开网络参考图并保存owned产物/实际像素；不调用参考规划模型，不预定后续生成",
                     schema(query=text_schema(200), subject=text_schema(80, 0)), search_image_references))
@@ -1228,7 +1281,7 @@ class AutonomousSocialExecutor:
                 send_schema['properties']['as_forward'] = {'type': 'boolean'}
                 send_schema['properties']['video_artifact_id'] = text_schema(64)
                 send_schema['properties']['media_artifact_ids'] = {'type': 'array', 'items': text_schema(64), 'minItems': 1, 'maxItems': 20, 'uniqueItems': True}
-            tools.append(AgentTool(name, "发送到当前已授权目标；图片普通最多2张，as_forward=true最多20张合并转发。media_artifact_ids配合as_forward=true按序打包图片和视频，不与artifact_ids/video_artifact_id混用。video_artifact_id只发单视频。按真实回执判断成功", send_schema, send, "write"))
+            tools.append(AgentTool(name, "发送到当前已授权目标；图片普通最多2张，as_forward=true最多20张合并转发。media_artifact_ids配合as_forward=true按序打包图片和视频，不与artifact_ids/video_artifact_id混用。video_artifact_id只发单视频。按真实回执判断成功。想在文本里@某个群友：写 [@他的群名片或昵称]，会自动转成真正的@；只在专门找他、欢迎新人、点名回应时用，别滥用", send_schema, send, "write"))
         if self.profile is not None:
             if job.kind == "profile" and "nickname" in job.identity_tools:
                 tools.append(AgentTool("set_nickname", "修改自己的账号昵称，不能修改别人", schema(name=text_schema(32)), nickname, "write"))
@@ -1251,6 +1304,14 @@ class AutonomousSocialExecutor:
                     submit=submit_media if self.runtime_mode == 'harness' and interactive and current_target and not owner_command else None)
             tools.extend(wrap_share_web_tools(web_tools, share_access,
                 observed_source_ids=observed_sources))
+        if job.kind == 'group':
+            # 插件注册表：表情包、日记等功能插件的工具从这里汇入。
+            registry = getattr(self.router, "plugin_registry", None)
+            if registry is not None:
+                from app.agent.plugins.base import TurnContext
+                tools.extend(registry.build_tools(TurnContext(
+                    router=self.router, job=job, guard=guard, store=store,
+                    blocking=self.blocking, interactive=interactive, now=observation.now)))
         for factory in self.factories:
             tools.extend(factory(observation, guard))
         if self.runtime_mode == "harness":
@@ -1366,7 +1427,9 @@ class AutonomousSocialExecutor:
             from app.agent.media_tasks import build_media_batch_tool
             tools.extend(build_media_batch_tool(tools, guard))
         if hasattr(original_guard, 'reserve_model') and interactive:
-            tools = [replace(tool, authorization=lambda: False) if tool.effect == 'image' else tool for tool in tools]
+            # 计量轮封的是昂贵的图片生成；本地表情选取零成本，斗图依赖它。
+            tools = [replace(tool, authorization=lambda: False)
+                if tool.effect == 'image' and tool.name != 'pick_sticker' else tool for tool in tools]
         write_available = bool(owner_authority) or interactive or (job.patrol_interval_seconds is not None) or SocialAgentRepository(self.router.engine).action_budget_available(
             account_id=self.router.runtime.settings.bot_qq, job=job, now=self.clock(), own_action_id=guard.action_id)
         if not owner_authority and not interactive and job.kind == "group":
@@ -1400,7 +1463,9 @@ class AutonomousSocialExecutor:
             from app.agent.harness_runtime import HarnessToolAgent, model_context_format_version
             selection = (select_group_image_sources(self.router.engine, job.scope_id, observation.source_message_ids,
                 target_source_id=current_target.get('source_id') if current_target else None,
-                now=observation.now) if job.kind == 'group' and not owner_command else None)
+                now=observation.now,
+                bot_names=self.router._build_bot_names(""),
+                ) if job.kind == 'group' and not owner_command else None)
             if selection is not None:
                 if len(observed_sources | set(selection.source_ids)) > 200:
                     selection = replace(selection, source_ids=(), reason='image_source_budget_exhausted')
@@ -1469,10 +1534,13 @@ class AutonomousSocialExecutor:
                 async def finish_patrol(args):
                     guard.require_valid()
                     return ToolOutcome({'finished': True, 'reason': args['reason']})
-                tools.append(AgentTool('finish_patrol', '本轮巡检已无需要继续的工作时结束；不需要反复保存等待下次的例行意图',
+                tools.append(AgentTool('finish_patrol', '本轮巡检结束。结束前如果想说点什么，必须先用 send_group 把话发出去；只把文字写在心里然后结束，群里什么都不会收到',
                     schema(reason=text_schema(300)), finish_patrol))
                 prompt.append('巡检可以静默结束。没有新动态、作品或值得继续的目标时直接结束或调用finish_patrol；'
-                    '不要把等待下次巡检当成待执行步骤，不要反复保存同一例行意图。有实际创作或研究进展时照常保存进展。')
+                    '不要把等待下次巡检当成待执行步骤，不要反复保存同一例行意图。有实际创作或研究进展时照常保存进展。'
+                    '但如果你想开口，先分一下场合：适合公开的必须调用 send_group 把话发出去，'
+                    '把回复写在文字里再结束等于没说；不适合发群里的碎碎念、观察和心情，用 write_diary 写进自己的日记，'
+                    '日记是私下的，群友看不到。确实两者都没有再静默。')
             total_timeout = (getattr(settings, 'agent_task_turn_timeout_seconds', 600)
                 if direct_group_reply else settings.group_agent_turn_timeout_seconds) if interactive else settings.agent_background_turn_timeout_seconds
             if research_result is not None:
@@ -1696,7 +1764,11 @@ class AutonomousSocialExecutor:
             with session_scope(self.router.engine) as db:
                 recent = [row for row in MessageRepository(db).list_recent_group_messages(group_id=job.scope_id, limit=24)
                     if is_usable_memory_source(row, group_id=job.scope_id)]
-                context = tuple(json.dumps({'source_id': row.id, 'author_id': row.user_id,
+                def _author_label(row):
+                    label = self._author_label_for(row.user_id, job.scope_id)
+                    return f"{label}（QQ {row.user_id}）" if label else str(row.user_id)
+
+                context = tuple(json.dumps({'source_id': row.id, 'author_id': _author_label(row),
                     'text': row.plain_text[:700], 'timestamp': shanghai_aware(row.timestamp).isoformat()}, ensure_ascii=False)
                     for row in recent)
                 sources = tuple(row.id for row in recent)

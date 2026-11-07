@@ -29,7 +29,10 @@ services:
     build:
       context: ../..
       dockerfile: infra/wsl/Dockerfile.xiaomachi
-      network: host
+      # 本机补丁：原为 `network: host`。Docker 29 的 Bake 会把该声明转成
+      # entitlement 申请，而 `docker compose build` 无法透传 --allow=network.host，
+      # 构建会直接中止。本项目 DOCKER_HTTP_PROXY 为空，构建无需 host 网络，
+      # 故移除；如需构建期走宿主代理，应改为启用 DOCKER_HTTP_PROXY 并使用桥接网络。
       args:
         PIP_DEFAULT_TIMEOUT: ${PIP_DEFAULT_TIMEOUT:-120}
         PIP_RETRIES: ${PIP_RETRIES:-10}
@@ -56,6 +59,10 @@ services:
       - xiaomachi_data:/workspace/data
       - ./private-secrets:/run/xiaomachi-secrets:ro
       - xiaomachi_xhs_session:/workspace/data/xhs-crawler
+      # Local sticker/meme library (read-only) for the pick_sticker tool.
+      - ${LOCAL_STICKER_HOST_DIR:-/mnt/e/QQ-Bot/memes}:/workspace/memes:ro
+      # Alarm voice clips (read-only): reminder worker picks one at random.
+      - ${ALARM_SOUND_HOST_DIR:-/mnt/e/QQ-Bot/alarms}:/workspace/alarms:ro
     depends_on:
       napcat:
         condition: service_started

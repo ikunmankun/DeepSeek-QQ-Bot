@@ -23,6 +23,9 @@ def build_proactive_judge_prompt(
     now: datetime,
     context_messages: int = 5,
     max_chars_per_message: int = 120,
+    mood_hint: str | None = None,
+    relation_hint: str | None = None,
+    history_hint: str | None = None,
 ) -> list[str]:
     recent = [
         message[:max_chars_per_message]
@@ -31,15 +34,24 @@ def build_proactive_judge_prompt(
     ]
     joined_recent = "\n".join(recent)
     local_now = now.astimezone()
-    return [
+    lines = [
         f"System persona: Decide whether {bot_name} should proactively chime in with one short teasing message in this group chat.",
         "Safety rules: Reply with exactly two separate lines, each on its own line, in this grammar:\nDECISION: yes|no\nREASON: <one short line>\nDo not put DECISION and REASON on the same line, do not use slashes between them, and do not add markdown, bullets, or anything else.",
         "Group policy: Say yes only when the conversation is lively and a short, smug, playful interjection would naturally fit (a funny claim, a dumb take, big news, a teasing opportunity, or a topic the bot clearly has a strong opinion on). Say no for boring logistics, private personal details, off-topic noise, long technical discussion without a hook, or anything where butting in would be annoying. Stay selective: silence is the default.",
+    ]
+    # 判定的情境偏置（当前情绪 / 对方关系 / 历史插话成绩）。它们改变的是
+    # "要不要说"的门槛，不是说话内容；缺省时不占提示词。
+    for hint in (mood_hint, relation_hint, history_hint):
+        hint = str(hint or "").strip()
+        if hint:
+            lines.append(f"Context: {hint}")
+    lines.extend([
         f"Current time: {local_now.strftime('%Y-%m-%d %H:%M')}.",
         "Recent messages:",
         joined_recent,
         f"Target message: {target_message}",
-    ]
+    ])
+    return lines
 
 
 _DECISION_PATTERN = re.compile(r"DECISION\s*:\s*(yes|no)", re.IGNORECASE)

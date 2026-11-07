@@ -22,10 +22,12 @@ async def unused(args):
 async def test_filter_allows_only_explicit_group_drawing(group_images):
     names = {"generate_image": "image", "generate_private_image": "image",
         "execute_python": "compute", "set_group_card": "write", "memory_write": "write",
-        "send_group": "write", "send_private": "write", "read_context": "read",
+        "send_group": "write", "send_private": "write", "speak_private": "write",
+        "record_wish": "write", "read_context": "read", "pick_sticker": "image",
         "unknown_image": "image", "unknown_write": "write"}
     tools = [AgentTool(name, name, {}, unused, effect) for name, effect in names.items()]
-    expected = {"send_group", "send_private", "read_context"}
+    expected = {"send_group", "send_private", "speak_private", "record_wish",
+        "read_context", "pick_sticker"}
     if group_images:
         expected.add("generate_image")
     restricted = restrict_directed_tools(tools, owner=False, allow_group_images=group_images)

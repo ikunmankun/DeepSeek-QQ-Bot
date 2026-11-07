@@ -177,6 +177,7 @@ class PrivateChatService:
         image_reference_search_client=None,
         image_reference_planner_client=None,
         reply_split_config: dict | None = None,
+        typing_settings=None,
         image_model: str = "gpt-image-2",
         image_size: str | None = "auto",
         image_quality: str | None = "high",
@@ -219,6 +220,8 @@ class PrivateChatService:
             if reply_split_config is not None
             else build_reply_split_config()
         )
+        # 拟人打字延迟的配置来源；不传（测试/旧调用）则延迟恒为 0。
+        self.typing_settings = typing_settings
         self.private_image_service = PrivateImageGenerationService(
             engine=engine,
             llm_client=self.image_llm_client,
@@ -472,6 +475,13 @@ class PrivateChatService:
                 as_forward=as_forward, **({'media_files': media_files} if media_files else {'video_file': video_file} if video_file else {}))
         burst = {'enabled': False} if long_form else self.reply_split_config
         segments = [text.strip()] if long_form else split_burst_reply(text, burst)
+        # 拟人打字延迟：DM 也要有"看到了、打完字才发"的节奏；长文档类
+        # (long_form) 保持直发。未配置 typing_settings 时恒为 0。
+        from app.core.chat_style import typing_delay_seconds
+
+        typing_delay = 0.0 if long_form else typing_delay_seconds(self.typing_settings, text)
+        if typing_delay > 0:
+            await asyncio.sleep(typing_delay)
         # Same window as the group delivery path, from the shared helper.
         delay_min, delay_max = burst_delays(burst, segment_count=len(segments))
         for index, segment in enumerate(segments):
