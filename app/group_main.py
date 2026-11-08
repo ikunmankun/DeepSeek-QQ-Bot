@@ -793,7 +793,7 @@ async def run() -> None:
                 await router.handle_group_message(event)
 
         async def backfill_group_history_on_connect() -> None:
-            nonlocal group_image_started
+            nonlocal group_image_started, music_started
             set_agents_connected(True)
             if (
                 not group_image_started

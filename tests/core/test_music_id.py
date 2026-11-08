@@ -142,3 +142,69 @@ def test_guess_from_lyrics_no_candidates_returns_none():
     llm = _FakeLLM("无")
     match = guess_from_lyrics("只有说话内容", llm=llm, web_search_client=_FakeSearch([]))
     assert match is None
+
+
+def test_xfyun_authorization_signature_format():
+    import base64 as b64
+    import hashlib as hl
+    import hmac as hm
+    from app.core.music_id import xfyun_authorization
+
+    url = "https://cn-east-1.api.xf-yun.com/v1/private/s29ebee0d"
+    date = "Sat, 08 Nov 2026 05:00:00 GMT"
+    auth = xfyun_authorization("key-1", "secret-2", url, date)
+    origin = b64.b64decode(auth).decode()
+    assert 'api_key="key-1"' in origin and 'algorithm="hmac-sha256"' in origin
+    assert 'headers="host date request-line"' in origin
+    sig = origin.split('signature="', 1)[1].rstrip('"')
+    expected_origin = ("host: cn-east-1.api.xf-yun.com\n"
+                       f"date: {date}\n"
+                       "POST /v1/private/s29ebee0d HTTP/1.1")
+    expected_sig = b64.b64encode(hm.new(b"secret-2", expected_origin.encode(), hl.sha256).digest()).decode()
+    assert sig == expected_sig
+
+
+def test_xfyun_request_shape_and_match_parsing(tmp_path, monkeypatch):
+    import base64 as b64
+    import json as js
+    import app.core.music_id as mid
+
+    audio = tmp_path / "clip.mp3"
+    audio.write_bytes(b"fake")
+    captured = {}
+    result_text = b64.b64encode(js.dumps({"metadata": {"music": [
+        {"title": "弱一点的", "score": 60},
+        {"title": "歌名X", "artists": [{"name": "歌手A"}, {"name": "歌手B"}],
+         "album": {"name": "专辑C"}, "score": 92},
+    ]}}).encode()).decode()
+    monkeypatch.setattr(mid.httpx, "post", lambda url, headers=None, json=None, timeout=None:
+        captured.update(url=url, headers=headers, body=json) or
+        _FakeResponse({"header": {"code": 0, "message": "success"},
+                       "payload": {"output_text": {"text": result_text}}}))
+    match = mid.identify_by_fingerprint_xfyun(audio, app_id="app-9", api_key="k", api_secret="s")
+    assert captured["url"] == mid.XFYUN_MUSIC_URL
+    assert "Authorization" in captured["headers"] and "Date" in captured["headers"]
+    assert captured["body"]["header"] == {"app_id": "app-9", "status": 3}
+    assert captured["body"]["parameter"]["acr_music"]["mode"] == "music"
+    data = captured["body"]["payload"]["data"]
+    assert data["encoding"] == "lame" and data["sample_rate"] == 16000 and data["channels"] == 1
+    assert match.title == "歌名X" and match.artist == "歌手A、歌手B" and match.album == "专辑C"
+
+
+def test_xfyun_no_match_and_error(tmp_path, monkeypatch):
+    import base64 as b64
+    import json as js
+    import app.core.music_id as mid
+
+    audio = tmp_path / "clip.mp3"
+    audio.write_bytes(b"fake")
+    empty = b64.b64encode(js.dumps({"metadata": {"music": []}}).encode()).decode()
+    monkeypatch.setattr(mid.httpx, "post", lambda *a, **k:
+        _FakeResponse({"header": {"code": 0, "message": "success"},
+                       "payload": {"output_text": {"text": empty}}}))
+    assert mid.identify_by_fingerprint_xfyun(audio, app_id="a", api_key="k", api_secret="s") is None
+
+    monkeypatch.setattr(mid.httpx, "post", lambda *a, **k:
+        _FakeResponse({"header": {"code": 10105, "message": "illegal client_ip"}}))
+    with pytest.raises(OSError, match="illegal client_ip"):
+        mid.identify_by_fingerprint_xfyun(audio, app_id="a", api_key="k", api_secret="s")

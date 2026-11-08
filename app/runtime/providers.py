@@ -445,9 +445,15 @@ def build_group_image_service(
 
 def build_music_identification_service(*, settings: AppSettings, llm_client, sender,
                                        web_search_client=None):
-    """MUSIC_ID_API_TOKEN 未配置时返回 None：工具不注册、服务不建（对齐 TTS 开关约定）。"""
+    """识别源凭证未配置时返回 None：工具不注册、服务不建（对齐 TTS 开关约定）。
+    audd 用 MUSIC_ID_API_TOKEN；xfyun 用 MUSIC_ID_APP_ID/API_KEY/API_SECRET 三件套。"""
     from app.core.music_identification import MusicIdentificationService
-    if not str(getattr(settings, "music_id_api_token", "") or "").strip():
+    provider = (str(getattr(settings, "music_id_provider", "") or "audd")).strip().lower()
+    has_creds = (bool(str(getattr(settings, "music_id_api_token", "") or "").strip())
+                 if provider != "xfyun" else
+                 all(bool(str(getattr(settings, name, "") or "").strip())
+                     for name in ("music_id_app_id", "music_id_api_key", "music_id_api_secret")))
+    if not has_creds:
         return None
     return MusicIdentificationService(
         settings=settings, llm_client=llm_client, sender=sender,

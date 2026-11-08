@@ -44,10 +44,15 @@ class AppSettings(BaseSettings):
     tts_group_id: str = Field(default="", alias="TTS_GROUP_ID")      # MiniMax 必需
     tts_model: str = Field(default="mimo-v2.5-tts", alias="TTS_MODEL")
     tts_speed: float = Field(default=1.0, alias="TTS_SPEED")         # >1 更快更活泼  # MiniMax 音色模型
-    # 听歌识曲：MUSIC_ID_API_TOKEN 为空时功能整体隐藏（工具不注册、服务不建）。
-    # 识别源目前是 audD（https://audd.io 免费档），换识别源时改 MUSIC_ID_API_URL。
+    # 听歌识曲：MUSIC_ID_PROVIDER=audd（默认，用 MUSIC_ID_API_TOKEN）或 xfyun
+    # （讯飞「歌曲识别ACRCloud」，用 MUSIC_ID_APP_ID/API_KEY/API_SECRET 三件套；
+    # 原生"歌曲识别"只有哼唱 afs，识别不了视频原声 BGM）。凭证缺失时整体隐藏。
+    music_id_provider: str = Field(default="audd", alias="MUSIC_ID_PROVIDER")
     music_id_api_token: str = Field(default="", alias="MUSIC_ID_API_TOKEN")
-    music_id_api_url: str = Field(default="https://api.audd.io/", alias="MUSIC_ID_API_URL")
+    music_id_app_id: str = Field(default="", alias="MUSIC_ID_APP_ID")
+    music_id_api_key: str = Field(default="", alias="MUSIC_ID_API_KEY")
+    music_id_api_secret: str = Field(default="", alias="MUSIC_ID_API_SECRET")
+    music_id_api_url: str = Field(default="", alias="MUSIC_ID_API_URL")
     music_id_queue_capacity: int = Field(default=4, alias="MUSIC_ID_QUEUE_CAPACITY")
     music_id_timeout_seconds: float = Field(default=240, alias="MUSIC_ID_TIMEOUT_SECONDS")
     agent_runtime: Literal["harness", "legacy"] = Field(default="harness", alias="AGENT_RUNTIME")

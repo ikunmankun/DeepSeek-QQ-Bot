@@ -1,18 +1,27 @@
 """听歌识曲：音频指纹识别（主）+ B站字幕歌词兜底。
 
-路线A（主）：视频/音频 → ffmpeg 从中段切单声道片段 → audD 指纹 API → 歌名/歌手/链接。
+路线A（主）：视频/音频 → ffmpeg 从中段切单声道片段 → 指纹 API → 歌名/歌手。
+    识别源两个可选（MUSIC_ID_PROVIDER）：
+    * audd（默认）：https://api.audd.io/，单 token 鉴权，HTTP multipart。
+    * xfyun：讯飞「歌曲识别ACRCloud」WebAPI，appid/api_key/api_secret HMAC 签名，
+      mode=music 支持原声 BGM（原生"歌曲识别"只有哼唱 afs，别拿它识别原声）。
 路线C（兜底）：B站 AI 字幕常把唱词转成文字 → LLM 挑出像唱词的短句 → 网页搜歌词 → 歌名。
 
-识别源是外部限额服务：未配置 MUSIC_ID_API_TOKEN 时上层会把整个功能隐藏
+识别源是外部限额服务：凭证未配置时上层会把整个功能隐藏
 （工具不注册、服务不建），与 voice.py 的 TTS 开关约定一致。
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import subprocess
 from dataclasses import dataclass
+from email.utils import formatdate
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -21,6 +30,8 @@ logger = logging.getLogger(__name__)
 AUDIO_CLIP_SECONDS = 15.0
 _MAX_DOWNLOAD_BYTES = 60 * 1024 * 1024
 DEFAULT_AUDD_URL = "https://api.audd.io/"
+#: 讯飞「歌曲识别ACRCloud」音乐识别（原声）端点；哼唱版是 s9884ba49。
+XFYUN_MUSIC_URL = "https://cn-east-1.api.xf-yun.com/v1/private/s29ebee0d"
 
 
 @dataclass(slots=True)
@@ -105,6 +116,64 @@ def identify_by_fingerprint(audio: Path, *, api_token: str,
         album=str(result.get("album") or "").strip(),
         link=str(result.get("link") or "").strip(),
         timecode=str(result.get("timecode") or "").strip(),
+        source="fingerprint",
+    )
+
+
+def xfyun_authorization(api_key: str, api_secret: str, url: str, date: str) -> str:
+    """讯飞 WebAPI 鉴权头：HMAC-SHA256 签名后整体再 base64（官方拼接格式）。"""
+    parsed = urlsplit(url)
+    origin = f"host: {parsed.netloc}\ndate: {date}\nPOST {parsed.path} HTTP/1.1"
+    signature = base64.b64encode(
+        hmac.new(api_secret.encode("utf-8"), origin.encode("utf-8"), hashlib.sha256).digest()
+    ).decode("ascii")
+    auth_origin = (f'api_key="{api_key}",algorithm="hmac-sha256",'
+                   f'headers="host date request-line",signature="{signature}"')
+    return base64.b64encode(auth_origin.encode("utf-8")).decode("ascii")
+
+
+def identify_by_fingerprint_xfyun(audio: Path, *, app_id: str, api_key: str,
+                                  api_secret: str, api_url: str = XFYUN_MUSIC_URL,
+                                  timeout: float = 40.0) -> MusicMatch | None:
+    """讯飞音乐识别（ACRCloud 版，mode=music）。无匹配返回 None；鉴权/接口错误抛 OSError。"""
+    date = formatdate(usegmt=True)
+    headers = {
+        "Authorization": xfyun_authorization(api_key, api_secret, api_url, date),
+        "Date": date,
+        "Host": urlsplit(api_url).netloc,
+        "Content-Type": "application/json",
+    }
+    request = {
+        "header": {"app_id": app_id, "status": 3},
+        "parameter": {"acr_music": {"mode": "music",
+                                    "output_text": {"encoding": "utf8", "compress": "raw",
+                                                    "format": "json"}}},
+        "payload": {"data": {"encoding": "lame", "sample_rate": 16000, "channels": 1,
+                             "bit_depth": 16, "status": 3,
+                             "audio": base64.b64encode(audio.read_bytes()).decode("ascii"),
+                             "frame_size": 0}},
+    }
+    response = httpx.post(api_url, headers=headers, json=request, timeout=timeout)
+    response.raise_for_status()
+    payload = response.json()
+    header = payload.get("header") or {}
+    if int(header.get("code", -1)) != 0:
+        raise OSError(f"xfyun_error:{header.get('message')}"[:200])
+    text = str(((payload.get("payload") or {}).get("output_text") or {}).get("text") or "")
+    if not text:
+        return None
+    decoded = json.loads(base64.b64decode(text).decode("utf-8"))
+    items = (decoded.get("metadata") or {}).get("music") or []
+    if not items:
+        return None
+    items = sorted(items, key=lambda item: float(item.get("score") or 0), reverse=True)
+    top = items[0]
+    artists = "、".join(str(a.get("name") or "").strip()
+                        for a in (top.get("artists") or []) if a.get("name"))
+    return MusicMatch(
+        title=str(top.get("title") or "").strip(),
+        artist=artists,
+        album=str((top.get("album") or {}).get("name") or "").strip(),
         source="fingerprint",
     )
 

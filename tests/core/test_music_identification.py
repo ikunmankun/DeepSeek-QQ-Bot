@@ -159,3 +159,37 @@ def test_builder_hides_feature_without_token(tmp_path):
     service = build_music_identification_service(
         settings=_settings(tmp_path), llm_client=SimpleNamespace(), sender=_FakeSender())
     assert service is not None and service.api_token == "tok"
+
+
+def test_xfyun_provider_dispatch_and_builder(tmp_path, monkeypatch):
+    def settings_for(**overrides):
+        values = dict(data_dir=tmp_path, music_id_provider="xfyun", music_id_api_token="",
+                      music_id_app_id="app", music_id_api_key="key", music_id_api_secret="sec",
+                      music_id_api_url="", music_id_queue_capacity=2,
+                      music_id_timeout_seconds=60)
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    from app.runtime.providers import build_music_identification_service
+    assert build_music_identification_service(
+        settings=settings_for(music_id_api_secret=""), llm_client=None, sender=None) is None
+    service = build_music_identification_service(
+        settings=settings_for(), llm_client=SimpleNamespace(), sender=_FakeSender())
+    assert service is not None and service.enabled and service.provider == "xfyun"
+
+    sender = _FakeSender()
+    service = MusicIdentificationService(settings=settings_for(), llm_client=SimpleNamespace(),
+                                         sender=sender, web_search_client=None)
+    _fake_media(tmp_path, monkeypatch)
+    called = {}
+    monkeypatch.setattr(mi, "identify_by_fingerprint_xfyun",
+                        lambda audio, app_id, api_key, api_secret, api_url=None, timeout=None:
+                        called.update(app_id=app_id, url=api_url) or
+                        mi.MusicMatch(title="讯飞歌"))
+    monkeypatch.setattr(mi, "identify_by_fingerprint",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("audd must not be called")))
+    state = mi.MusicJobState(request=_request())
+    asyncio.run(service._process(state))
+    assert state.status == "delivered" and state.match.title == "讯飞歌"
+    assert called["app_id"] == "app" and "s29ebee0d" in str(called["url"])
+    assert "讯飞歌" in sender.groups[0][1]

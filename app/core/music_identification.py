@@ -17,8 +17,9 @@ from app.adapters.sender import (
     OutboundMessage, OutboundPrivateMessage, QQMessageDeliveryUncertainError,
 )
 from app.core.music_id import (
-    DEFAULT_AUDD_URL, MusicMatch, download_audio, extract_audio_clip,
-    guess_from_lyrics, identify_by_fingerprint,
+    DEFAULT_AUDD_URL, XFYUN_MUSIC_URL, MusicMatch, download_audio,
+    extract_audio_clip, guess_from_lyrics, identify_by_fingerprint,
+    identify_by_fingerprint_xfyun,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,11 +59,21 @@ class MusicIdentificationService:
         self.web_search_client = web_search_client
         self.queue_capacity = int(queue_capacity)
         self.timeout_seconds = float(timeout_seconds)
+        self.provider = (str(getattr(settings, "music_id_provider", "") or "audd")).strip().lower()
         self.api_token = str(getattr(settings, "music_id_api_token", "") or "").strip()
+        self.app_id = str(getattr(settings, "music_id_app_id", "") or "").strip()
+        self.api_key = str(getattr(settings, "music_id_api_key", "") or "").strip()
+        self.api_secret = str(getattr(settings, "music_id_api_secret", "") or "").strip()
         self.api_url = str(getattr(settings, "music_id_api_url", "") or "").strip() or None
         self._queue: deque[MusicJobState] = deque()
         self._worker: asyncio.Task | None = None
         self._wakeup = asyncio.Event()
+
+    @property
+    def enabled(self) -> bool:
+        if self.provider == "xfyun":
+            return bool(self.app_id and self.api_key and self.api_secret)
+        return bool(self.api_token)
 
     # ---- lifecycle ----
 
@@ -84,7 +95,7 @@ class MusicIdentificationService:
 
     def enqueue(self, request: MusicIdentificationRequest) -> int | None:
         """入队；队列满返回 None（调用方报 music_queue_full）。"""
-        if not self.api_token:
+        if not self.enabled:
             return None
         if len(self._queue) >= self.queue_capacity:
             return None
@@ -142,9 +153,16 @@ class MusicIdentificationService:
                 return None
         try:
             clip = extract_audio_clip(downloaded, workdir)
-            match = identify_by_fingerprint(clip, api_token=self.api_token,
-                                            api_url=self.api_url or DEFAULT_AUDD_URL,
-                                            timeout=min(self.timeout_seconds, 60.0))
+            if self.provider == "xfyun":
+                match = identify_by_fingerprint_xfyun(
+                    clip, app_id=self.app_id, api_key=self.api_key,
+                    api_secret=self.api_secret,
+                    api_url=self.api_url or XFYUN_MUSIC_URL,
+                    timeout=min(self.timeout_seconds, 60.0))
+            else:
+                match = identify_by_fingerprint(clip, api_token=self.api_token,
+                                                api_url=self.api_url or DEFAULT_AUDD_URL,
+                                                timeout=min(self.timeout_seconds, 60.0))
             if match is not None:
                 return match
         except Exception as exc:
