@@ -94,13 +94,18 @@ def download_audio(url: str, workdir: Path, *, settings, timeout: int = 150) -> 
 def identify_by_fingerprint(audio: Path, *, api_token: str,
                             api_url: str = DEFAULT_AUDD_URL,
                             timeout: float = 40.0) -> MusicMatch | None:
-    """audD 指纹识别。无匹配返回 None；鉴权/接口错误抛 OSError。"""
+    """audD 指纹识别。无匹配返回 None；鉴权/接口错误抛 OSError。
+
+    trust_env=False 直连：容器代理环境变量对 audd.io 是死路（2026-11-08 实测
+    直连 2s 成功、走代理 15s 超时），与 bili 登录"国内站绕代理"同一课。
+    """
     with audio.open("rb") as stream:
         response = httpx.post(
             api_url,
             data={"api_token": api_token, "return": "timecode"},
             files={"file": (audio.name, stream, "audio/mpeg")},
             timeout=timeout,
+            trust_env=False,
         )
     response.raise_for_status()
     payload = response.json()
@@ -153,7 +158,8 @@ def identify_by_fingerprint_xfyun(audio: Path, *, app_id: str, api_key: str,
                              "audio": base64.b64encode(audio.read_bytes()).decode("ascii"),
                              "frame_size": 0}},
     }
-    response = httpx.post(api_url, headers=headers, json=request, timeout=timeout)
+    response = httpx.post(api_url, headers=headers, json=request, timeout=timeout,
+                          trust_env=False)
     response.raise_for_status()
     payload = response.json()
     header = payload.get("header") or {}

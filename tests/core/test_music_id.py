@@ -67,7 +67,7 @@ def test_fingerprint_parses_match(tmp_path, monkeypatch):
     audio.write_bytes(b"fake")
     captured = {}
 
-    def fake_post(url, data=None, files=None, timeout=None):
+    def fake_post(url, data=None, files=None, timeout=None, **kwargs):
         captured["url"] = url
         captured["token"] = data["api_token"]
         captured["file"] = files["file"][0]
@@ -177,7 +177,7 @@ def test_xfyun_request_shape_and_match_parsing(tmp_path, monkeypatch):
         {"title": "歌名X", "artists": [{"name": "歌手A"}, {"name": "歌手B"}],
          "album": {"name": "专辑C"}, "score": 92},
     ]}}).encode()).decode()
-    monkeypatch.setattr(mid.httpx, "post", lambda url, headers=None, json=None, timeout=None:
+    monkeypatch.setattr(mid.httpx, "post", lambda url, headers=None, json=None, timeout=None, **kwargs:
         captured.update(url=url, headers=headers, body=json) or
         _FakeResponse({"header": {"code": 0, "message": "success"},
                        "payload": {"output_text": {"text": result_text}}}))
