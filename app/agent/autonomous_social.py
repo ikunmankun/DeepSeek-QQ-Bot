@@ -1315,7 +1315,7 @@ class AutonomousSocialExecutor:
                     return ToolOutcome({"error": "music_queue_full"}, "blocked")
                 return ToolOutcome({"queued": True, "position": position,
                     "guidance": "识别在后台跑：下载音轨→指纹匹配，失败会自动走字幕歌词兜底，结果稍后直接发进群。排队不是完成，别报具体时间。"})
-            tools.append(AgentTool("identify_music", "听歌识曲：给一个视频/音频链接（B站最佳，b23.tv短链也行）或已下载媒体的artifact_id，后台下载音轨识别歌名/歌手，结果直接发到本群。群里发视频问'这是什么歌'、或你刷到想单曲循环的BGM时用。排队不是完成，一次一个来源", {"type": "object",
+            tools.append(AgentTool("identify_music", "听歌识曲：给一个视频/音频链接（B站最佳，b23.tv短链也行）或已下载媒体的artifact_id，后台下载音轨识别歌名/歌手，结果直接发到本群。有人发视频/音频问'这是什么歌''BGM是什么'时**用它，别用download_web_video绕路**——你听不了音频，媒体下载管线也给不了答案。排队不是完成，一次一个来源", {"type": "object",
                 "properties": {"url": text_schema(600, 0), "artifact_id": text_schema(64, 0)},
                 "required": [], "additionalProperties": False}, identify_music, "read"))
         if job.kind != "profile":

@@ -72,10 +72,15 @@ def extract_audio_clip(source: Path, workdir: Path,
 
 
 def download_audio(url: str, workdir: Path, *, settings, timeout: int = 150) -> Path:
-    """yt-dlp 取音轨；B站链接自动带登录 cookie。返回本地文件。"""
+    """yt-dlp 取音轨；B站链接自动带登录 cookie。返回本地文件。
+
+    --proxy "" 显式禁代理：容器 HTTP_PROXY 指向的 mihomo 一旦挂掉，
+    国内站（B站）也会被它截胡到超时（2026-11-08 实测），直连才是活的。
+    """
     from app.core.bili_subtitle import _netscape_cookie_file
     workdir.mkdir(parents=True, exist_ok=True)
     cmd = ["yt-dlp", "-f", "bestaudio/best", "--no-playlist",
+           "--proxy", "",
            "--max-filesize", str(_MAX_DOWNLOAD_BYTES),
            "-o", str(workdir / "music-src.%(ext)s")]
     cookie = _netscape_cookie_file(settings, workdir)
