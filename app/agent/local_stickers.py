@@ -111,6 +111,7 @@ def build_sticker_tools(*, runner, guard, store, directory: Path,
             "从本地表情库挑一张表情发出去。她是个表情包用得很大方的群友：心情到位、斗图、"
             "无语、得意、看戏、懒得打字，都可以直接甩图，不必等特殊时刻；对方发图过来时，"
             "首选回击一张（先 pick_sticker 取图再 send_group），纯文字接图是下策。"
+            "回应纯表情时可以直接只发图、不配文字。"
             "唯一的约束是别一口气连发两张以上（斗图回合除外）。"
             "取到 artifact_id 后必须立刻用 send_group 的 artifact_ids 把它发出去，"
             "否则对方什么也看不到，只返回 artifact_id 等于没发。"

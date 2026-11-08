@@ -911,6 +911,10 @@ class AutonomousSocialExecutor:
             # 识梗引导常驻：看不懂梗是常态，不是特定心情。
             from app.core.group_mood import MEME_UNDERSTANDING_HINT
             prompt.append("Group policy: " + MEME_UNDERSTANDING_HINT)
+        if job.kind == "group":
+            # 斗图节奏引导常驻：图接图、表情可裸发。
+            from app.core.group_mood import STICKER_WAR_HINT
+            prompt.append("Group policy: " + STICKER_WAR_HINT)
         if (job.kind == "group" and observing and not owner_command
                 and getattr(self.router.runtime.settings, "silence_learning_enabled", False)):
             # 沉默学习（harness）：legacy 在 reply.py 硬闸，这里把同样的

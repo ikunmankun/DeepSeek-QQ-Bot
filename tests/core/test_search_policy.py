@@ -345,3 +345,21 @@ def test_search_priority_instructions_pin_the_current_year_and_ban_cannot_search
         and "what the search did find" in line
         for line in instructions
     )
+
+
+def test_ongoing_exchange_ignores_pure_sticker_but_keeps_text():
+    """斗图刷屏时纯表情/图片不再触发续聊准入；文字接话仍成立。"""
+    base = dict(bot_names={'小町'}, reply_to_bot=False, quoted_bot=False,
+                bot_recently_participated=True, recent_bot_message_count=1,
+                allow_ongoing_exchange=True)
+    assert detect_address_intent(text='', **base, has_authored_text=False).is_addressed is False
+    assert detect_address_intent(text='[表情：大怨种]', **base, has_authored_text=False).is_addressed is False
+    assert detect_address_intent(text='还能踏海哦', **base, has_authored_text=True).is_addressed is True
+    # @ 和引用回复不受影响
+    assert detect_address_intent(text='', bot_names={'小町'}, reply_to_bot=False, quoted_bot=False,
+                                 bot_recently_participated=True, recent_bot_message_count=1,
+                                 allow_ongoing_exchange=True, has_authored_text=False,
+                                 other_addressee=False).is_addressed is False
+    assert detect_address_intent(text='@小町', bot_names={'小町'}, reply_to_bot=False, quoted_bot=False,
+                                 bot_recently_participated=True, recent_bot_message_count=1,
+                                 allow_ongoing_exchange=True, has_authored_text=False).is_addressed is True

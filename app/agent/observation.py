@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -69,6 +70,9 @@ class GroupObservationService:
         recent_bot_count = sum(
             item.user_id == router.runtime.settings.bot_qq for item in recent[-3:]
         )
+        # 纯表情/图片（去掉占位符后没有文字）不算"接话"：斗图刷屏时不
+        # 应句句都回；@或回复仍无条件准入。
+        authored_text = re.sub(r"\[(?:表情|动画表情|图片|CQ)[^\]]*\]", "", event.plain_text or "").strip()
         address = detect_address_intent(
             text=event.plain_text.lower(),
             bot_names=router._build_bot_names(str(persona.get("name", ""))),
@@ -80,6 +84,7 @@ class GroupObservationService:
                 item.user_id == router.runtime.settings.bot_qq for item in recent[-10:]
             ),
             recent_bot_message_count=recent_bot_count,
+            has_authored_text=bool(authored_text),
             other_addressee=evidence['other_addressee'] and not event.mentioned_bot,
             # 本机补丁：harness 的准入判定原本不传这个开关，导致 router 里新增的
             # ongoing_exchange（不 @ 也能接着聊）在准入阶段就被否掉，消息根本

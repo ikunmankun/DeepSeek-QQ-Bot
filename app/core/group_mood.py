@@ -60,6 +60,12 @@ _SECOND_PERSON = re.compile(r"你|您")
 STICKER_HINT_MOODS = frozenset({"annoyed", "smug"})
 STICKER_HINT = "被怼或对方甩图斗图时，优先甩一张表情包（pick_sticker 挑，send_group 发），文字只当配菜。"
 
+#: 斗图节奏引导，常驻：斗图回合必须图接图；纯表情回应裸发就好。
+STICKER_WAR_HINT = (
+    "群友在连发表情/图片斗图时：用 pick_sticker 挑一张图接图（send_group 发），"
+    "别只打字看戏；回应纯表情时可以直接只发图、一个字都不带，那才是群友的接法。"
+)
+
 #: 识梗引导：模型看图没问题，缺的是"看不懂就去搜+讲人话+记住"这条路径。
 #: 放群/私聊 prompt 常驻，不是情绪才注入——看不懂梗是常态不是心情。
 MEME_UNDERSTANDING_HINT = (
