@@ -60,6 +60,15 @@ _SECOND_PERSON = re.compile(r"你|您")
 STICKER_HINT_MOODS = frozenset({"annoyed", "smug"})
 STICKER_HINT = "被怼或对方甩图斗图时，优先甩一张表情包（pick_sticker 挑，send_group 发），文字只当配菜。"
 
+#: 识梗引导：模型看图没问题，缺的是"看不懂就去搜+讲人话+记住"这条路径。
+#: 放群/私聊 prompt 常驻，不是情绪才注入——看不懂梗是常态不是心情。
+MEME_UNDERSTANDING_HINT = (
+    "别人发的梗图你看不懂时，别跟着尬笑也别装懂：先看画面里实际画了什么（有 find_learned_meme "
+    "就先查学过的梗库），没查到就 search_web 搜『画面特征 梗 出处』确认在玩什么梗，"
+    "然后用你自己的话点破笑点；实在搜不到就直说没看懂，让对方讲讲。"
+    "真搞懂的梗下次直接认出来，不用再装。"
+)
+
 #: 起因摘录里去掉会剧透具体聊天的长句，只留短因。
 _REASON_MAX_CHARS = 40
 

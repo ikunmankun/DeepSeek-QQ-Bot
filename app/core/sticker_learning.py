@@ -33,9 +33,14 @@ MAX_LEARNED_FILES = 500
 TAG_BATCH_PER_TICK = 8
 
 TAG_PROMPT = (
-    "这是QQ群里会用的表情包。给出2到3个简短中文关键词，描述它表达的情绪或适用场景，"
-    "用单个下划线_分隔。只输出关键词本身，不要解释。"
+    "这是QQ群里会用的表情包。先给出2到3个简短中文关键词描述它表达的情绪或适用场景，"
+    "用单个下划线_分隔；然后接一个竖线||，再用不超过20字说明这张图的梗含义或笑点"
+    "（是知名梗就说梗名，看不懂梗就描述画面内容）。只输出这一行，不要解释。"
+    "示例：无语_看戏_吃瓜||熊猫头趴桌摆烂，表达无语看戏"
 )
+
+#: 标签段和含义段的分隔符。
+_MEANING_SPLIT = "||"
 
 _TAG_SPLIT = re.compile(r"[_、,，;；\s]+")
 
@@ -114,6 +119,10 @@ class StickerLearner:
         )
         response.raise_for_status()
         raw = str(response.json()["choices"][0]["message"]["content"] or "").strip()
+        meaning = ""
+        if _MEANING_SPLIT in raw:
+            raw, _, meaning_raw = raw.partition(_MEANING_SPLIT)
+            meaning = re.sub(r"[\r\n]", "", meaning_raw).strip("。．.！!？?~～ ")[:40]
         tags = _TAG_SPLIT.split(raw)
         cleaned = []
         for part in tags[:3]:
@@ -123,7 +132,8 @@ class StickerLearner:
         if not cleaned:
             raise ValueError("empty tags")
         sidecar = path.with_suffix(".json")
-        sidecar.write_text(json.dumps({"tags": "_".join(cleaned)}, ensure_ascii=False),
+        sidecar.write_text(json.dumps({"tags": "_".join(cleaned), "meaning": meaning},
+                                      ensure_ascii=False),
                            encoding="utf-8")
         return "_".join(cleaned)
 
@@ -132,7 +142,19 @@ class StickerLearner:
         if not sidecar.exists():
             return ""
         try:
-            return str(json.loads(sidecar.read_text(encoding="utf-8")).get("tags", ""))
+            data = json.loads(sidecar.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return ""
+        tags = str(data.get("tags", ""))
+        meaning = str(data.get("meaning", "") or "")
+        return f"{tags}||{meaning}" if meaning else tags
+
+    def load_meaning(self, path: Path) -> str:
+        sidecar = path.with_suffix(".json")
+        if not sidecar.exists():
+            return ""
+        try:
+            return str(json.loads(sidecar.read_text(encoding="utf-8")).get("meaning", "") or "")
         except (OSError, ValueError):
             return ""
 

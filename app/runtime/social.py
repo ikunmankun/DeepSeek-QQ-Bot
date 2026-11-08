@@ -90,6 +90,7 @@ def build_social_agent(*, router, sender, gateway, llm_client):
         # primary model, not a lightweight classifier with limited planning ability.
         executor = AutonomousSocialExecutor(router=router, sender=sender, qzone_adapter=qzone,
             decision_client=llm_client, image_service=getattr(router, "group_image_service", None),
+            music_service=getattr(router, "music_identification_service", None),
             profile_adapter=AccountProfileAdapter(gateway, account_id=settings.bot_qq,
                 allowed_group_ids=tuple(job.scope_id for job in jobs if job.kind == "group"),
                 media_roots=((settings.data_dir / "autonomous_artifacts").resolve(),))) if autonomous else SocialExecutor(router=router, sender=sender, qzone_adapter=qzone)

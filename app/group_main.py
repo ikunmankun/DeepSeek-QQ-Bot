@@ -33,6 +33,7 @@ from app.main import (
     build_image_reference_search_client,
     build_llm_client,
     build_memory_runtime,
+    build_music_identification_service,
     build_proactive_judge_client,
     build_usage_recorder,
     build_web_search_client,
@@ -397,6 +398,7 @@ async def run() -> None:
     await media_janitor.start()
     engine = None
     group_image_service = None
+    music_identification_service = None
     memory_compaction_service = None
     persona_sync_task = None
     persona_task_worker = None
@@ -408,6 +410,7 @@ async def run() -> None:
     social_agent = None
     social_planner = None
     group_image_started = False
+    music_started = False
     owner_action_worker = None
     owner_notice_worker = None
     delegated_research_worker = None
@@ -444,6 +447,10 @@ async def run() -> None:
             sender=sender,
             web_search_client=image_reference_search_client,
             image_reference_planner_client=image_reference_planner_client,
+        )
+        music_identification_service = build_music_identification_service(
+            settings=settings, llm_client=llm_client, sender=sender,
+            web_search_client=web_search_client,
         )
         memory_runtime = await asyncio.to_thread(
             build_memory_runtime,
@@ -632,6 +639,7 @@ async def run() -> None:
             web_search_client=web_search_client,
             private_chat_service=None,
             group_image_service=group_image_service,
+            music_identification_service=music_identification_service,
             memory_compaction_service=memory_compaction_service,
             memory_orchestrator=memory_runtime.memory_orchestrator,
             persona_manager=persona_manager,
@@ -795,6 +803,9 @@ async def run() -> None:
                 # Recovered drawings may send only after policy and OneBot are ready.
                 await group_image_service.start()
                 group_image_started = True
+            if not music_started and music_identification_service is not None:
+                await music_identification_service.start()
+                music_started = True
             _write_group_ready_marker(log_dir=settings.log_dir, state="connected")
             try:
                 watermark_message_id = _max_message_id(engine)
@@ -854,6 +865,8 @@ async def run() -> None:
             await plugin_registry.stop_workers()
         if group_image_service is not None and hasattr(group_image_service, "stop") and getattr(group_image_service, "engine", None) is not None:
             await group_image_service.stop()
+        if music_identification_service is not None:
+            await music_identification_service.stop()
         if memory_compaction_service is not None:
             await memory_compaction_service.stop()
         await heartbeat.stop()

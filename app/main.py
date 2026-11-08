@@ -130,6 +130,15 @@ def build_group_image_service(
     )
 
 
+def build_music_identification_service(*, settings: AppSettings, llm_client, sender,
+                                       web_search_client=None):
+    """Compatibility facade; implementation lives in app.runtime."""
+    return _provider_composition.build_music_identification_service(
+        settings=settings, llm_client=llm_client, sender=sender,
+        web_search_client=web_search_client,
+    )
+
+
 def _build_query_rewrite_provider(*, settings: AppSettings, llm_client, engine=None):
     """Compatibility facade; implementation lives in app.runtime."""
     return _provider_composition._build_query_rewrite_provider(

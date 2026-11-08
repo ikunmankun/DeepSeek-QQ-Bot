@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from app.core.memory_fact_ranking import (
@@ -383,19 +383,22 @@ def test_temporal_recency_required_detects_recent_intent() -> None:
 
 
 def test_rank_member_facts_recency_boost_prefers_fresh_facts() -> None:
+    # 日期相对 now 取：新鲜条目必须稳在 90 天半衰期内（importance=1 的
+    # fact 基础半衰期），写死绝对日期会随日历漂移翻转淡忘判定
+    # （2026-11-08 当天 2026-08-10 恰好满 90 天翻车过一次）。
     recent = _fact(
         2,
         "用户表示下周去考古",
         importance=1,
         confidence=0.5,
-        valid_from=datetime(2026, 8, 10, tzinfo=UTC),
+        valid_from=datetime.now(UTC) - timedelta(days=30),
     )
     stale = _fact(
         1,
         "用户表示打算开发一键上号功能",
         importance=9,
         confidence=0.9,
-        valid_from=datetime(2026, 3, 1, tzinfo=UTC),
+        valid_from=datetime.now(UTC) - timedelta(days=200),
     )
     features = memory_query_features(query="小甲最近有什么计划")
     ranked = rank_member_facts(

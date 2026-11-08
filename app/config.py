@@ -44,6 +44,12 @@ class AppSettings(BaseSettings):
     tts_group_id: str = Field(default="", alias="TTS_GROUP_ID")      # MiniMax 必需
     tts_model: str = Field(default="mimo-v2.5-tts", alias="TTS_MODEL")
     tts_speed: float = Field(default=1.0, alias="TTS_SPEED")         # >1 更快更活泼  # MiniMax 音色模型
+    # 听歌识曲：MUSIC_ID_API_TOKEN 为空时功能整体隐藏（工具不注册、服务不建）。
+    # 识别源目前是 audD（https://audd.io 免费档），换识别源时改 MUSIC_ID_API_URL。
+    music_id_api_token: str = Field(default="", alias="MUSIC_ID_API_TOKEN")
+    music_id_api_url: str = Field(default="https://api.audd.io/", alias="MUSIC_ID_API_URL")
+    music_id_queue_capacity: int = Field(default=4, alias="MUSIC_ID_QUEUE_CAPACITY")
+    music_id_timeout_seconds: float = Field(default=240, alias="MUSIC_ID_TIMEOUT_SECONDS")
     agent_runtime: Literal["harness", "legacy"] = Field(default="harness", alias="AGENT_RUNTIME")
     agent_responses_continuation: Literal["off", "auto", "on"] = Field(default="auto", alias="AGENT_RESPONSES_CONTINUATION")
     agent_max_external_writes: int = Field(default=2, ge=1, le=8, alias="AGENT_MAX_EXTERNAL_WRITES")
@@ -506,6 +512,23 @@ class AppSettings(BaseSettings):
         ge=0,
         le=50,
         alias="MEMORY_VECTOR_CANDIDATE_LIMIT",
+    )
+    # 余额看护：DeepSeek 余额跌破阈值时私聊主人撒娇要饭钱。
+    balance_alert_enabled: bool = Field(
+        default=True,
+        alias="BALANCE_ALERT_ENABLED",
+    )
+    balance_alert_threshold_yuan: float = Field(
+        default=5.0,
+        ge=0.0,
+        le=1000.0,
+        alias="BALANCE_ALERT_THRESHOLD_YUAN",
+    )
+    balance_alert_interval_hours: int = Field(
+        default=24,
+        ge=1,
+        le=168,
+        alias="BALANCE_ALERT_INTERVAL_HOURS",
     )
     trait_evolution_enabled: bool = Field(
         default=True,

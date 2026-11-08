@@ -34,16 +34,18 @@ def _catalog(directory: Path) -> list[Path]:
 
 
 def _match_tags(path: Path, needle: str) -> bool:
-    """学习库图的关键词在 <hash>.json 标签里（编号库的标签在文件名里）。"""
+    """学习库图的关键词在 <hash>.json 的 tags 或 meaning 里（编号库的标签在文件名里）。"""
 
     sidecar = path.with_suffix(".json")
     if not sidecar.exists():
         return False
     try:
-        tags = str(json.loads(sidecar.read_text(encoding="utf-8")).get("tags", ""))
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        tags = str(data.get("tags", ""))
+        meaning = str(data.get("meaning", "") or "")
     except (OSError, ValueError):
         return False
-    return needle in tags.lower()
+    return needle in tags.lower() or needle in meaning.lower()
 
 
 def build_sticker_tools(*, runner, guard, store, directory: Path,

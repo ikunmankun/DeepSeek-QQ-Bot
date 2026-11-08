@@ -220,6 +220,7 @@ class InboundRouter(GroupPersonaContextMixin, GroupPolicyMixin, GroupIngestMixin
     web_search_client: WebSearchClient | None = None
     private_chat_service: object | None = None
     group_image_service: object | None = None
+    music_identification_service: object | None = None
     memory_compaction_service: object | None = None
     memory_orchestrator: MemoryOrchestrator | None = None
     persona_manager: PersonaManager | None = None

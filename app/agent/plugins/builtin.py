@@ -14,6 +14,42 @@ from app.agent.plugins.base import FeatureModule, InboundContext, TurnContext
 from app.agent.tool_agent import AgentTool, ToolOutcome
 
 
+def _build_learned_meme_tool(learner) -> AgentTool:
+    """识梗记忆：按关键词查学过的表情（情绪标签 + 梗含义）。"""
+    from app.core.sticker_learning import IMAGE_SUFFIXES
+
+    def find(args):
+        needle = str(args.get("keyword") or "").strip().lower()
+        if not needle:
+            return ToolOutcome({"error": "keyword_required"}, "blocked")
+        hits = []
+        if learner.learned_dir.exists():
+            for path in sorted(learner.learned_dir.iterdir()):
+                if path.suffix.lower() not in IMAGE_SUFFIXES:
+                    continue
+                tags = learner.load_tags(path)
+                meaning = learner.load_meaning(path)
+                haystack = f"{tags} {meaning}".lower()
+                if needle in haystack:
+                    hits.append({"file": path.stem, "tags": tags, "meaning": meaning,
+                                 "meme_id": path.stem})
+                if len(hits) >= 8:
+                    break
+        return ToolOutcome({"matches": hits, "matched": len(hits),
+            "guidance": "命中的图用 pick_sticker(meme_id=文件名) 精确取图；没命中就 search_web 搜梗，"
+                        "搞懂后这张图被打标时含义会进梗库。"}, "ok")
+
+    return AgentTool(
+        "find_learned_meme",
+        "按关键词查自己学过的梗图（情绪标签+梗含义）。群里又出现见过的梗时先查这里，"
+        "秒懂不用装；想复用某张学过的图也用它定位 meme_id 再 pick_sticker 取图。",
+        {"type": "object", "properties": {"keyword": {"type": "string", "maxLength": 32}},
+         "required": ["keyword"], "additionalProperties": False},
+        find,
+        "read",
+    )
+
+
 class StickerFeature(FeatureModule):
     """本地表情库：pick_sticker 工具，按 LOCAL_STICKER_DIR 开关。"""
 
@@ -27,9 +63,11 @@ class StickerFeature(FeatureModule):
         from app.core.sticker_learning import StickerLearner
 
         learner = StickerLearner(turn.router.runtime.settings.data_dir)
-        return list(build_sticker_tools(runner=turn.blocking, guard=turn.guard,
-                                        store=turn.store, directory=Path(sticker_dir),
-                                        extra_directory=learner.learned_dir))
+        tools = list(build_sticker_tools(runner=turn.blocking, guard=turn.guard,
+                                         store=turn.store, directory=Path(sticker_dir),
+                                         extra_directory=learner.learned_dir))
+        tools.append(_build_learned_meme_tool(learner))
+        return tools
 
 
 class DiaryFeature(FeatureModule):

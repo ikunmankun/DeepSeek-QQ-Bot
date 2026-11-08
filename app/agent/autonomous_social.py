@@ -148,9 +148,10 @@ class AutonomousSocialPlanner(SocialPlanner):
 
 class AutonomousSocialExecutor:
     def __init__(self, *, router, sender, qzone_adapter, decision_client, image_service=None,
-                 profile_adapter=None, clock=None, sandbox=None):
+                 music_service=None, profile_adapter=None, clock=None, sandbox=None):
         self.router, self.sender, self.qzone = router, sender, qzone_adapter
         self.decision_client, self.image_service = decision_client, image_service
+        self.music_service = music_service
         self.profile, self.sandbox = profile_adapter, sandbox
         self.compute_permission = deepcopy(router.runtime.social_policy.get("compute", {}))
         self.clock = clock or (lambda: datetime.now(UTC))
@@ -885,16 +886,18 @@ class AutonomousSocialExecutor:
                   "Group policy: 这是连续运行中的一次唤醒，可延续自己的目标，也可发现新兴趣或保持安静。工具是能力清单，没有预设执行顺序。只有确有价值时才发送；禁止CQ控制片段。公开空间只能使用自己的公开兴趣，不能引用群聊或私聊资料。"]
         if persona_guidance:
             prompt.append('Current persona guidance:\n' + persona_guidance)
+        plugin_hook_lines: list[str] = []
         if job.kind == "group":
-            # 插件注册表的提示行（当前情绪等）：语气由人设 mood 段决定。
+            # 插件注册表的提示行（情绪/议程/人生笔记）：内容逐回合会变，
+            # 统一挪到 prompt 末尾注入——插在头部会让后面所有稳定内容
+            # （政策/记忆/上下文）整段错过 DeepSeek 前缀缓存。
             registry = getattr(self.router, "plugin_registry", None)
             if registry is not None:
                 target_user_id = int(current_target["source_id"]) if current_target else None
-                for hook_line in registry.prompt_lines(
-                        kind=job.kind, group_id=job.scope_id,
-                        now=observation.now, observing=observing,
-                        target_user_id=target_user_id):
-                    prompt.append(hook_line)
+                plugin_hook_lines = list(registry.prompt_lines(
+                    kind=job.kind, group_id=job.scope_id,
+                    now=observation.now, observing=observing,
+                    target_user_id=target_user_id))
         if job.patrol_interval_seconds is not None and not owner_command:
             prompt.append("Group policy: 这是一次随机日间空间巡检，额度只是上限，完全允许今天不发布或不评论。"
                 "有明确想分享的原创内容才发布；好友有新动态且你有具体、贴合内容的回应才评论。"
@@ -904,6 +907,10 @@ class AutonomousSocialExecutor:
             from app.agent.participation_feedback import PROACTIVE_PARTICIPATION_RULES
             prompt.append('Group policy: ' + PROACTIVE_PARTICIPATION_RULES
                 if not direct_group_reply else "Group policy: 这是对你的直接互动。请回应当前真实目标；对外回复必须调用send_group，内部最终文字不会发到QQ。")
+        if job.kind == "group":
+            # 识梗引导常驻：看不懂梗是常态，不是特定心情。
+            from app.core.group_mood import MEME_UNDERSTANDING_HINT
+            prompt.append("Group policy: " + MEME_UNDERSTANDING_HINT)
         if (job.kind == "group" and observing and not owner_command
                 and getattr(self.router.runtime.settings, "silence_learning_enabled", False)):
             # 沉默学习（harness）：legacy 在 reply.py 硬闸，这里把同样的
@@ -1272,6 +1279,45 @@ class AutonomousSocialExecutor:
             if callable(getattr(getattr(self.image_service, "web_search_client", None), "image_search", None)):
                 tools.append(AgentTool("search_image_references", "自主选择查询公开网络参考图并保存owned产物/实际像素；不调用参考规划模型，不预定后续生成",
                     schema(query=text_schema(200), subject=text_schema(80, 0)), search_image_references))
+        if self.music_service is not None and job.kind == "group":
+            async def identify_music(args):
+                guard.require_valid()
+                url = str(args.get("url") or "").strip()
+                artifact = str(args.get("artifact_id") or "").strip()
+                if bool(url) == bool(artifact):
+                    return ToolOutcome({"error": "music_source_ambiguous",
+                        "guidance": "url 和 artifact_id 二选一"}, "blocked")
+                if artifact:
+                    try:
+                        source_path = artifact_path(artifact)
+                    except ValueError as exc:
+                        return ToolOutcome({"error": artifact_error(exc)}, "blocked")
+                    from app.core.music_identification import MusicIdentificationRequest
+                    request = MusicIdentificationRequest(
+                        source_url=artifact, source_path=source_path, group_id=job.scope_id,
+                        trigger_message_id=str(current_target.get('message_id', '')) if current_target else '',
+                        requester_user_id=int(current_target.get('author_id', 0)) if current_target else 0,
+                        requested_text=str(current_target.get('text', ''))[:400] if current_target else '')
+                else:
+                    from app.core.url_policy import public_web_url
+                    from app.core.music_identification import MusicIdentificationRequest
+                    try:
+                        url = public_web_url(url)
+                    except Exception:
+                        return ToolOutcome({"error": "music_url_unsupported"}, "blocked")
+                    request = MusicIdentificationRequest(
+                        source_url=url, group_id=job.scope_id,
+                        trigger_message_id=str(current_target.get('message_id', '')) if current_target else '',
+                        requester_user_id=int(current_target.get('author_id', 0)) if current_target else 0,
+                        requested_text=str(current_target.get('text', ''))[:400] if current_target else '')
+                position = self.music_service.enqueue(request)
+                if position is None:
+                    return ToolOutcome({"error": "music_queue_full"}, "blocked")
+                return ToolOutcome({"queued": True, "position": position,
+                    "guidance": "识别在后台跑：下载音轨→指纹匹配，失败会自动走字幕歌词兜底，结果稍后直接发进群。排队不是完成，别报具体时间。"})
+            tools.append(AgentTool("identify_music", "听歌识曲：给一个视频/音频链接（B站最佳，b23.tv短链也行）或已下载媒体的artifact_id，后台下载音轨识别歌名/歌手，结果直接发到本群。群里发视频问'这是什么歌'、或你刷到想单曲循环的BGM时用。排队不是完成，一次一个来源", {"type": "object",
+                "properties": {"url": text_schema(600, 0), "artifact_id": text_schema(64, 0)},
+                "required": [], "additionalProperties": False}, identify_music, "read"))
         if job.kind != "profile":
             name = {"group": "send_group", "qzone_publish": "publish_qzone", "qzone_comment": "comment_qzone"}[job.kind]
             send_schema = schema(text=text_schema(12000 if job.kind == 'group' else 300 if job.kind != "qzone_publish" else 1000), artifact_ids={"type": "array", "items": text_schema(64), "maxItems": 20 if job.kind == 'group' else 2})
@@ -1690,7 +1736,7 @@ class AutonomousSocialExecutor:
             if self.runtime_mode == "legacy" and job.kind == "qzone_comment" and not images and (post is None or not post.text.strip()):
                 from app.agent.tool_agent import ToolTurnResult
                 return ToolTurnResult("silent", reason="no_visible_post")
-            result = await agent.run(prompt, tuple(tools), guard, images=images, resources=resources)
+            result = await agent.run([*prompt, *plugin_hook_lines], tuple(tools), guard, images=images, resources=resources)
             if self.runtime_mode == "harness":
                 guard.parent.require_valid()
                 native_logs = native_session_logs(session_home, session_id)
