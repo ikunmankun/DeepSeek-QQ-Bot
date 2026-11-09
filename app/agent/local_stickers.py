@@ -33,23 +33,27 @@ def _catalog(directory: Path) -> list[Path]:
     )
 
 
-def _match_tags(path: Path, needle: str) -> bool:
-    """学习库图的关键词在 <hash>.json 的 tags 或 meaning 里（编号库的标签在文件名里）。"""
-
-    sidecar = path.with_suffix(".json")
-    if not sidecar.exists():
-        return False
-    try:
-        data = json.loads(sidecar.read_text(encoding="utf-8"))
-        tags = str(data.get("tags", ""))
-        meaning = str(data.get("meaning", "") or "")
-    except (OSError, ValueError):
-        return False
-    return needle in tags.lower() or needle in meaning.lower()
+def _match_tags(path: Path, needle: str, meanings_dir: Path | None = None) -> bool:
+    """学习库图的关键词在 <hash>.json 的 tags/meaning 里；memes 编号库的关键词
+    在文件名 + data/meme_meanings/<编号>.json 的 tags/meaning 里。"""
+    for sidecar in (path.with_suffix(".json"),
+                    None if meanings_dir is None else meanings_dir / (path.stem + ".json")):
+        if sidecar is None or not sidecar.exists():
+            continue
+        try:
+            data = json.loads(sidecar.read_text(encoding="utf-8"))
+            tags = str(data.get("tags", ""))
+            meaning = str(data.get("meaning", "") or "")
+        except (OSError, ValueError):
+            continue
+        if needle in tags.lower() or needle in meaning.lower():
+            return True
+    return False
 
 
 def build_sticker_tools(*, runner, guard, store, directory: Path,
-                        extra_directory: Path | None = None):
+                        extra_directory: Path | None = None,
+                        meanings_dir: Path | None = None):
     directory = Path(directory)
     extra_directory = Path(extra_directory) if extra_directory else None
 
@@ -68,10 +72,14 @@ def build_sticker_tools(*, runner, guard, store, directory: Path,
         needle = (str(args.get("meme_id") or "").strip() or str(args.get("keyword") or "").strip()).lower()
         if needle:
             pool = [path for path in files
-                    if needle in path.stem.lower() or _match_tags(path, needle)]
+                    if needle in path.stem.lower() or _match_tags(path, needle, meanings_dir)]
+            if not pool:
+                # 本机补丁：匹配不到不再静默随机兜底——模型以为发了对的表情，
+                # 实际发的是无关图（"用错表情包"的直接病灶）。报错让它换词或明说随机。
+                return ToolOutcome({"error": "keyword_no_match", "keyword": needle,
+                    "guidance": "表情库没有匹配这个关键词的图：换个情绪词/梗名再试（标签和梗含义都参与匹配），"
+                                "或明确改用不传参数的随机取图。"}, "blocked")
         else:
-            pool = files
-        if not pool:
             pool = files
         choice = random.choice(pool)
 
@@ -115,7 +123,8 @@ def build_sticker_tools(*, runner, guard, store, directory: Path,
             "唯一的约束是别一口气连发两张以上（斗图回合除外）。"
             "取到 artifact_id 后必须立刻用 send_group 的 artifact_ids 把它发出去，"
             "否则对方什么也看不到，只返回 artifact_id 等于没发。"
-            "meme_id 按编号精确选，keyword 按文件名里的情绪标签筛选（如'无语''看戏''吃瓜'），都不传就随机一张。",
+            "meme_id 按编号精确选；keyword 按文件名情绪标签和梗含义筛选（如'无语''看戏''吃瓜'），"
+            "匹配不到会报 keyword_no_match（换词重试或干脆不传参数随机取一张）。",
             schema({
                 "meme_id": {"type": "string", "maxLength": 64},
                 "keyword": {"type": "string", "maxLength": 32},

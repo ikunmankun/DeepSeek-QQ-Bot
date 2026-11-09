@@ -139,6 +139,18 @@ def build_music_identification_service(*, settings: AppSettings, llm_client, sen
     )
 
 
+def build_fuzzy_recall_service(*, settings: AppSettings, llm_client, engine):
+    """Compatibility facade; implementation lives in app.runtime."""
+    return _provider_composition.build_fuzzy_recall_service(
+        settings=settings, llm_client=llm_client, engine=engine,
+    )
+
+
+def build_reverse_image_searcher(*, settings: AppSettings):
+    """Compatibility facade; implementation lives in app.runtime."""
+    return _provider_composition.build_reverse_image_searcher(settings=settings)
+
+
 def _build_query_rewrite_provider(*, settings: AppSettings, llm_client, engine=None):
     """Compatibility facade; implementation lives in app.runtime."""
     return _provider_composition._build_query_rewrite_provider(

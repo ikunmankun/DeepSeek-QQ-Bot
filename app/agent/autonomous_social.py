@@ -148,10 +148,11 @@ class AutonomousSocialPlanner(SocialPlanner):
 
 class AutonomousSocialExecutor:
     def __init__(self, *, router, sender, qzone_adapter, decision_client, image_service=None,
-                 music_service=None, profile_adapter=None, clock=None, sandbox=None):
+                 music_service=None, reverse_image_searcher=None, profile_adapter=None, clock=None, sandbox=None):
         self.router, self.sender, self.qzone = router, sender, qzone_adapter
         self.decision_client, self.image_service = decision_client, image_service
         self.music_service = music_service
+        self.reverse_image_searcher = reverse_image_searcher
         self.profile, self.sandbox = profile_adapter, sandbox
         self.compute_permission = deepcopy(router.runtime.social_policy.get("compute", {}))
         self.clock = clock or (lambda: datetime.now(UTC))
@@ -915,6 +916,10 @@ class AutonomousSocialExecutor:
             # 斗图节奏引导常驻：图接图、表情可裸发。
             from app.core.group_mood import STICKER_WAR_HINT
             prompt.append("Group policy: " + STICKER_WAR_HINT)
+        if job.kind == "group":
+            # 技术回答限长：正经问题也不许写小作文。
+            prompt.append("Group policy: 技术问题同样最多三句：先给结论或最短可用的答案，"
+                "细节等对方追问再给；确实需要长资料就 delegate_research_task 走后台任务，不在群里刷屏。")
         if (job.kind == "group" and observing and not owner_command
                 and getattr(self.router.runtime.settings, "silence_learning_enabled", False)):
             # 沉默学习（harness）：legacy 在 reply.py 硬闸，这里把同样的
@@ -1322,6 +1327,42 @@ class AutonomousSocialExecutor:
             tools.append(AgentTool("identify_music", "听歌识曲：给一个视频/音频链接（B站最佳，b23.tv短链也行）或已下载媒体的artifact_id，后台下载音轨识别歌名/歌手，结果直接发到本群。有人发视频/音频问'这是什么歌''BGM是什么'时**用它，别用download_web_video绕路**——你听不了音频，媒体下载管线也给不了答案。排队不是完成，一次一个来源", {"type": "object",
                 "properties": {"url": text_schema(600, 0), "artifact_id": text_schema(64, 0)},
                 "required": [], "additionalProperties": False}, identify_music, "read"))
+        if self.reverse_image_searcher is not None and job.kind == "group":
+            async def search_image_origin(args):
+                guard.require_valid()
+                requested = int(args.get("source_id") or 0)
+                if requested and requested not in observed_sources:
+                    return ToolOutcome({"error": "image_source_out_of_scope",
+                        "guidance": "source_id 必须是本轮观察里出现过的消息 id"}, "blocked")
+                aliases = tuple(str(one) for one in (self.router.runtime.persona.get("aliases") or []) if one)
+                from app.core.reverse_image_search import hit_to_payload
+
+                def resolve_and_search():
+                    selection = select_group_image_sources(
+                        self.router.engine, job.scope_id, tuple(observed_sources),
+                        target_source_id=requested or ((current_target or {}).get("source_id") or None),
+                        now=observation.now, bot_names=aliases or None)
+                    if not selection.source_ids:
+                        return None, selection.reason
+                    with canonical_group_image_inputs(
+                            self.router.engine, job.scope_id, selection.source_ids,
+                            cache_dir=self.router.runtime.settings.data_dir / "image_cache") as pictures:
+                        if not pictures:
+                            return None, "image_pixels_unavailable"
+                        hits = self.reverse_image_searcher.search(Path(pictures[0].local_path))
+                        return [hit_to_payload(hit) for hit in hits], selection.reason
+                try:
+                    hits, reason = await self.blocking.run(resolve_and_search)
+                except Exception:
+                    return ToolOutcome({"error": "reverse_image_search_failed"}, "failed")
+                if hits is None:
+                    return ToolOutcome({"error": "no_image_found", "reason": str(reason),
+                        "guidance": "没找到可搜的图：让对方重发一次图，或传那条带图消息的source_id"}, "blocked")
+                return ToolOutcome({"hits": hits, "source_reason": str(reason),
+                    "guidance": "没搜到就直说没搜到，绝不编出处；报最可信的一条并附链接，series_url 是同系列/相似图入口，similarity 低于60就说不确定。"}, "ok" if hits else "failed")
+            tools.append(AgentTool("search_image_origin", "以图搜图：把本群消息里的图拿去搜来源和同系列（pixiv/画师/番剧集数）。有人发图问'这是哪来的''出处是哪''求同款'时用。source_id 传那条带图消息的 source_id（观察里消息自带），不传默认搜当前或被引用的图。同步出结果，一轮一次", {"type": "object",
+                "properties": {"source_id": {"type": "integer", "minimum": 1, "maximum": 2**63 - 1}},
+                "required": [], "additionalProperties": False}, search_image_origin, "read"))
         if job.kind != "profile":
             name = {"group": "send_group", "qzone_publish": "publish_qzone", "qzone_comment": "comment_qzone"}[job.kind]
             send_schema = schema(text=text_schema(12000 if job.kind == 'group' else 300 if job.kind != "qzone_publish" else 1000), artifact_ids={"type": "array", "items": text_schema(64), "maxItems": 20 if job.kind == 'group' else 2})
@@ -1384,7 +1425,7 @@ class AutonomousSocialExecutor:
                         target=owner_command['target'] if owner_command else 'group',
                         group_id=job.scope_id if job.kind=='group' else 0,include_images=False,
                         delay_seconds=args['delay_seconds'],goal=args['goal'],before_commit=guard.require_valid)
-                due = self.clock() + timedelta(seconds=max(15, args["delay_seconds"]))
+                due = self.clock() + timedelta(seconds=max(180, args["delay_seconds"]))
                 note = intention_note({"goal": args["goal"], "progress": "", "next_step": "到期重新观察并决定"})
                 if note is None:
                     return ToolOutcome({"error": "intention_dependency_budget_exhausted"}, "blocked")

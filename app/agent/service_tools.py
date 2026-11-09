@@ -409,8 +409,8 @@ def build_service_tools(context: ServiceToolContext) -> tuple[AgentTool, ...]:
     if context.schedule_wakeup is not None:
         async def schedule(args):
             return await invoke(context.schedule_wakeup, args)
-        tools.append(AgentTool("schedule_wakeup", "保存当前授权范围稍后继续的目标/提醒，到期唤醒Agent决定行动，不预定发送内容",
-            _object(goal=_text(500), delay_seconds={"type": "integer", "minimum": 1, "maximum": 604800}), schedule))
+        tools.append(AgentTool("schedule_wakeup", "保存当前授权范围稍后继续的目标/提醒，到期唤醒Agent决定行动，不预定发送内容。同一话题等回音时最短约3分钟才会唤醒，别排更近的追问",
+            _object(goal=_text(500), delay_seconds={"type": "integer", "minimum": 180, "maximum": 604800}), schedule))
     if context.list_wakeups is not None:
         async def list_wakeups(args):
             return await invoke(context.list_wakeups, args)
@@ -501,6 +501,35 @@ def build_service_tools(context: ServiceToolContext) -> tuple[AgentTool, ...]:
             async def handler(args, name=name):
                 return await memory_call(name, args)
             tools.append(AgentTool(name, specification["description"], parameters, handler))
+
+    fuzzy_recall_service = getattr(router, "fuzzy_recall_service", None)
+    if fuzzy_recall_service is not None:
+        async def fuzzy_recall(args):
+            require_valid()
+            description = str(args.get("description") or "").strip()
+            if not description:
+                return ToolOutcome({"error": "empty_description"}, "blocked")
+            scope_group_ids = (job.scope_id,) if job.kind == "group" else ()
+            def run_recall():
+                return fuzzy_recall_service.recall(description, group_ids=scope_group_ids)
+            try:
+                value = await context.blocking.run(run_recall)
+            except Exception:
+                return ToolOutcome({"error": "fuzzy_recall_failed"}, "failed")
+            require_valid()
+            message_ids = tuple(int(hit["source_id"]) for hit in value.get("hits", ())
+                                if hit.get("source") == "group_message" and str(hit.get("source_id", "")).isdigit())
+            if message_ids:
+                _sources(router.engine, job.scope_id, message_ids)
+                context.observed_sources.update(message_ids)
+            hits = value.get("hits") or ()
+            return ToolOutcome({**value,
+                "guidance": "这些是记忆和聊天记录里的候选，不是定论：先用内容+时间帮用户确认，别报source_id这种内部编号。"
+                            "记忆全空且给了web_hints时，才拿候选名去web_search验证；验证不了就承认想不起来，别编。"},
+                "ok" if hits else "failed")
+        tools.append(AgentTool("fuzzy_recall", "模糊记忆检索：用户'话到嘴边想不起名字'时用——只记得画风/角色长相/玩法这类特征，"
+            "从自己的记忆、本群聊天记录、人生笔记里把候选内容找出来。描述写特征就行，越具体越好（画风、角色外貌、大致什么时候聊的）。同步出结果",
+            _object(description={"type": "string", "minLength": 2, "maxLength": 400}), fuzzy_recall))
 
     async def observe_images(args):
         require_valid()

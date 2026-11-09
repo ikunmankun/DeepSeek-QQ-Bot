@@ -95,9 +95,14 @@ class StickerLearner:
         return pending
 
     def tag_one(self, path: Path, *, base_url: str, api_key: str, model: str,
-                client: httpx.Client) -> str:
-        """用视觉模型给一张图生成下划线分隔的情绪标签并落盘。"""
+                client: httpx.Client, sidecar_dir: Path | None = None) -> str:
+        """用视觉模型给一张图生成下划线分隔的情绪标签（+梗含义）并落盘。
 
+        sidecar_dir：标签文件的落盘目录；默认写在图片旁边。memes/ 是只读
+        卷挂载，它的含义文件统一放 data/meme_meanings/。
+        """
+        sidecar_parent = Path(sidecar_dir) if sidecar_dir is not None else path.parent
+        sidecar_parent.mkdir(parents=True, exist_ok=True)
         media_type = MEDIA_TYPES.get(path.suffix.lower(), "image/webp")
         data_url = f"data:{media_type};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
         response = client.post(
@@ -131,14 +136,15 @@ class StickerLearner:
                 cleaned.append(tag)
         if not cleaned:
             raise ValueError("empty tags")
-        sidecar = path.with_suffix(".json")
+        sidecar = sidecar_parent / (path.stem + ".json")
         sidecar.write_text(json.dumps({"tags": "_".join(cleaned), "meaning": meaning},
                                       ensure_ascii=False),
                            encoding="utf-8")
         return "_".join(cleaned)
 
-    def load_tags(self, path: Path) -> str:
-        sidecar = path.with_suffix(".json")
+    def load_tags(self, path: Path, *, sidecar_dir: Path | None = None) -> str:
+        sidecar = (Path(sidecar_dir) / (path.stem + ".json")) if sidecar_dir is not None \
+            else path.with_suffix(".json")
         if not sidecar.exists():
             return ""
         try:
@@ -149,8 +155,9 @@ class StickerLearner:
         meaning = str(data.get("meaning", "") or "")
         return f"{tags}||{meaning}" if meaning else tags
 
-    def load_meaning(self, path: Path) -> str:
-        sidecar = path.with_suffix(".json")
+    def load_meaning(self, path: Path, *, sidecar_dir: Path | None = None) -> str:
+        sidecar = (Path(sidecar_dir) / (path.stem + ".json")) if sidecar_dir is not None \
+            else path.with_suffix(".json")
         if not sidecar.exists():
             return ""
         try:
@@ -160,13 +167,23 @@ class StickerLearner:
 
 
 class StickerTaggingService:
-    """周期 worker：给学习库里的新图打标签（每轮小批量）。"""
+    """周期 worker：给学习库里的新图打标签（每轮小批量），顺带回填 memes 库梗含义。
+
+    memes/ 是只读卷挂载，含义文件统一写到 data/meme_meanings/<编号>.json；
+    542 张库存按每轮 4 张慢慢补齐，不 burst。
+    """
 
     def __init__(self, *, learner: StickerLearner, settings: Any,
-                 interval_seconds: float = 600.0) -> None:
+                 interval_seconds: float = 600.0,
+                 memes_dir: Path | None = None,
+                 meme_meanings_dir: Path | None = None,
+                 memes_batch_per_tick: int = 4) -> None:
         self.learner = learner
         self.settings = settings
         self.interval_seconds = float(interval_seconds)
+        self.memes_dir = Path(memes_dir) if memes_dir else None
+        self.meanings_dir = Path(meme_meanings_dir) if meme_meanings_dir else None
+        self.memes_batch_per_tick = int(memes_batch_per_tick)
 
     async def run(self) -> None:
         while True:
@@ -181,27 +198,68 @@ class StickerTaggingService:
             await asyncio.sleep(self.interval_seconds)
 
     def _tick(self) -> int:
-        pending = self.learner.pending_tagging()[:TAG_BATCH_PER_TICK]
-        if not pending:
-            return 0
+        tagged = self._tick_learned()
+        tagged += self._tick_memes()
+        return tagged
+
+    def _vision_credentials(self) -> tuple[str, str, str] | None:
         base_url = (getattr(self.settings, "llm_base_url", "") or "").strip()
         api_key = (getattr(self.settings, "llm_api_key", "") or "").strip()
         model = (getattr(self.settings, "llm_model", "") or "").strip()
         if not api_key or not model:
+            return None
+        return base_url, api_key, model
+
+    def _tag_with_retry(self, client: httpx.Client, path: Path, creds, sidecar_dir: Path | None) -> bool:
+        base_url, api_key, model = creds
+        for attempt in (1, 2):
+            try:
+                self.learner.tag_one(path, base_url=base_url, api_key=api_key,
+                                     model=model, client=client, sidecar_dir=sidecar_dir)
+                return True
+            except Exception as exc:
+                if attempt == 2:
+                    logger.warning("sticker_tag_failed file=%s error=%s",
+                                   path.name, type(exc).__name__)
+        return False
+
+    def _tick_learned(self) -> int:
+        pending = self.learner.pending_tagging()[:TAG_BATCH_PER_TICK]
+        if not pending:
+            return 0
+        creds = self._vision_credentials()
+        if creds is None:
             return 0
         tagged = 0
         with httpx.Client() as client:
             for path in pending:
-                for attempt in (1, 2):
-                    try:
-                        self.learner.tag_one(path, base_url=base_url, api_key=api_key,
-                                             model=model, client=client)
-                        tagged += 1
-                        break
-                    except Exception as exc:
-                        if attempt == 2:
-                            logger.warning("sticker_tag_failed file=%s error=%s",
-                                           path.name, type(exc).__name__)
-                else:
-                    continue
+                if self._tag_with_retry(client, path, creds, None):
+                    tagged += 1
+        return tagged
+
+    def _tick_memes(self) -> int:
+        """给 memes 编号库补梗含义；已有含义文件的跳过，每轮小批量。"""
+        if self.memes_dir is None or self.meanings_dir is None:
+            return 0
+        if not self.memes_dir.exists():
+            return 0
+        pending = []
+        for path in sorted(self.memes_dir.iterdir()):
+            if path.suffix.lower() not in IMAGE_SUFFIXES:
+                continue
+            if (self.meanings_dir / (path.stem + ".json")).exists():
+                continue
+            pending.append(path)
+            if len(pending) >= self.memes_batch_per_tick:
+                break
+        if not pending:
+            return 0
+        creds = self._vision_credentials()
+        if creds is None:
+            return 0
+        tagged = 0
+        with httpx.Client() as client:
+            for path in pending:
+                if self._tag_with_retry(client, path, creds, self.meanings_dir):
+                    tagged += 1
         return tagged

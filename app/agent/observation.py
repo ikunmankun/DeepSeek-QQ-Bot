@@ -11,6 +11,50 @@ from datetime import UTC, datetime
 from app.adapters.outbound_guard import current_group_dispatch
 from app.config import group_recent_context_limit
 from app.core.memory_source_guard import is_usable_memory_source
+
+_STICKER_TEXT_PLACEHOLDER = re.compile(r"\[(?:表情|动画表情|图片|CQ)[^\]]*\]")
+
+
+def _sticker_caption_hint(data_dir, item) -> str:
+    """学过的表情包按内容哈希反查标签/梗含义，拼成上下文提示。
+
+    收到的表情先被 sticker_learning 收藏、打标（tags+meaning）；此后群里
+    再出现同一张图，即使像素没附加（rkey 过期等），模型也能从这行提示
+    知道它在玩什么。查不到就返回空串，不影响原行。
+    """
+    import hashlib
+    import json as _json
+    from pathlib import Path as _Path
+    try:
+        raw = item.raw_json or {}
+        if isinstance(raw, str):
+            raw = _json.loads(raw)
+        segments = raw.get("message") or []
+        for segment in segments:
+            if not isinstance(segment, dict) or segment.get("type") != "image":
+                continue
+            local_path = (segment.get("data") or {}).get("local_path") or ""
+            if not local_path:
+                continue
+            try:
+                digest = hashlib.sha256(_Path(local_path).read_bytes()).hexdigest()[:12]
+            except OSError:
+                continue
+            sidecar = _Path(data_dir) / "sticker_library" / "learned" / f"{digest}.json"
+            if not sidecar.exists():
+                continue
+            try:
+                data = _json.loads(sidecar.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            tags = str(data.get("tags") or "").replace("_", "、")
+            meaning = str(data.get("meaning") or "")
+            parts = [part for part in (tags, meaning) if part]
+            if parts:
+                return "（表情：" + "；".join(parts)[:70] + "）"
+    except Exception:
+        return ""
+    return ""
 from app.core.reply_policy import PolicyInput
 from app.core.search_policy import detect_address_intent
 from app.agent.shared_links import build_share_access, share_context_text
@@ -65,6 +109,12 @@ class GroupObservationService:
             if not event.mentioned_bot and not reply_to_bot and (
                 repeats_bot(source, recent, router.runtime.settings.bot_qq) or third_party_control(event.plain_text, names)
             ):
+                return False
+            # 本机补丁：话痨保护——最近 4 条里它已占 3 条且这条不是冲它来的，
+            # 闭嘴让别人说；@或回复仍无条件准入。
+            if not event.mentioned_bot and not reply_to_bot and sum(
+                item.user_id == router.runtime.settings.bot_qq for item in recent[-4:]
+            ) >= 3:
                 return False
         persona = router._active_persona(event.group_id)
         recent_bot_count = sum(
@@ -256,7 +306,7 @@ class GroupObservationService:
                         plain_text=share_context_text(item.raw_json, item.plain_text)[:700],
                         users_by_id=users_by_id,
                         group_id=batch.group_id,
-                    )
+                    ) + _sticker_caption_hint(router.runtime.settings.data_dir, item)
                     for item in visible
                 ],
             }

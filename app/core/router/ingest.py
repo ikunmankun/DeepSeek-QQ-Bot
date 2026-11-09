@@ -210,6 +210,42 @@ class GroupIngestMixin:
             logger.exception('group_participation_feedback_failed group_id=%s', event.group_id)
         return True
 
+    def _merge_own_message_echo(self, session, event, echo_row) -> None:
+        """自己的网关回执行与早到的管线记录行合并，避免上下文里自己刚说的话出现两份。
+
+        social_executor._finish_group_output 只在 echo 先到时合并；echo 晚一拍时
+        两行都带文本，模型在最近窗口会看到自己刚说的话两遍（强化复读、污染计数）。
+        这里按 文本+30 秒窗 找到管线行（带 social_action_id 且未 canonical 化），
+        把它标记 deleted，回执行保留为 canonical（带真实 message_id）。
+        """
+        if not (event.plain_text or "").strip():
+            return
+        from sqlalchemy import select as _select
+        from app.storage.models import Message
+        try:
+            cutoff = event.timestamp - timedelta(seconds=30)
+            candidates = session.scalars(_select(Message).where(
+                Message.group_id == event.group_id,
+                Message.user_id == event.user_id,
+                Message.id != echo_row.id,
+                Message.plain_text == event.plain_text,
+                Message.timestamp >= cutoff,
+            ).order_by(Message.id.desc()).limit(5))
+            for row in candidates:
+                raw = row.raw_json if isinstance(row.raw_json, dict) else {}
+                if not raw.get("social_action_id"):
+                    continue
+                if raw.get("delivery_state") not in ("sent", "uncertain"):
+                    continue
+                row.raw_json = {**raw, "delivery_state": "deleted",
+                                "canonical_platform_msg_id": echo_row.platform_msg_id}
+                row.plain_text = ""
+                logger.info("own_message_echo_merged echo=%s pipeline_row=%s",
+                            echo_row.platform_msg_id, row.id)
+                return
+        except Exception:
+            logger.exception("own_message_echo_merge_failed msg_id=%s", event.platform_msg_id)
+
     def _update_group_mood(self, session, messages, event) -> None:
         """入站情绪钩子：委托插件注册表（MoodFeature），无注册表时为 no-op。
 
@@ -311,6 +347,8 @@ class GroupIngestMixin:
                 reply_to_msg_id=event.reply_to_msg_id,
                 mentioned_bot=event.mentioned_bot,
             )
+            if event.user_id == self.runtime.settings.bot_qq:
+                self._merge_own_message_echo(session, event, inbound_message)
             self._update_group_mood(session, messages, event)
 
             current_lines = format_summary_source_lines(

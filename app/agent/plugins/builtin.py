@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any, Sequence
@@ -14,8 +15,8 @@ from app.agent.plugins.base import FeatureModule, InboundContext, TurnContext
 from app.agent.tool_agent import AgentTool, ToolOutcome
 
 
-def _build_learned_meme_tool(learner) -> AgentTool:
-    """识梗记忆：按关键词查学过的表情（情绪标签 + 梗含义）。"""
+def _build_learned_meme_tool(learner, meanings_dir=None) -> AgentTool:
+    """识梗记忆：按关键词查学过的表情（情绪标签 + 梗含义），含 memes 编号库。"""
     from app.core.sticker_learning import IMAGE_SUFFIXES
 
     def find(args):
@@ -33,6 +34,19 @@ def _build_learned_meme_tool(learner) -> AgentTool:
                 if needle in haystack:
                     hits.append({"file": path.stem, "tags": tags, "meaning": meaning,
                                  "meme_id": path.stem})
+                if len(hits) >= 8:
+                    break
+        if meanings_dir is not None and Path(meanings_dir).exists() and len(hits) < 8:
+            for sidecar in sorted(Path(meanings_dir).glob("*.json")):
+                try:
+                    data = json.loads(sidecar.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                haystack = f"{data.get('tags', '')} {data.get('meaning', '')}".lower()
+                if needle in haystack:
+                    hits.append({"file": sidecar.stem, "tags": str(data.get('tags', '')),
+                                 "meaning": str(data.get('meaning', '')),
+                                 "meme_id": sidecar.stem})
                 if len(hits) >= 8:
                     break
         return ToolOutcome({"matches": hits, "matched": len(hits),
@@ -63,10 +77,12 @@ class StickerFeature(FeatureModule):
         from app.core.sticker_learning import StickerLearner
 
         learner = StickerLearner(turn.router.runtime.settings.data_dir)
+        meanings_dir = Path(turn.router.runtime.settings.data_dir) / "meme_meanings"
         tools = list(build_sticker_tools(runner=turn.blocking, guard=turn.guard,
                                          store=turn.store, directory=Path(sticker_dir),
-                                         extra_directory=learner.learned_dir))
-        tools.append(_build_learned_meme_tool(learner))
+                                         extra_directory=learner.learned_dir,
+                                         meanings_dir=meanings_dir))
+        tools.append(_build_learned_meme_tool(learner, meanings_dir))
         return tools
 
 
@@ -234,7 +250,32 @@ class StickerLearningFeature(FeatureModule):
         if self._settings is None:
             return ()
         learner = StickerLearner(self._settings.data_dir)
-        return [StickerTaggingService(learner=learner, settings=self._settings)]
+        sticker_dir = str(getattr(self._settings, "local_sticker_dir", "") or "").strip()
+        return [StickerTaggingService(learner=learner, settings=self._settings,
+                                      memes_dir=Path(sticker_dir) if sticker_dir else None,
+                                      meme_meanings_dir=Path(self._settings.data_dir) / "meme_meanings")]
+
+
+class HealthReportFeature(FeatureModule):
+    """每日自检：22:00 私聊主人运行摘要（用量/投递/代理/表情库/识曲）。"""
+
+    name = "health_report"
+
+    _engine = None
+    _settings = None
+    _sender = None
+
+    def attach(self, *, engine, settings, sender) -> None:
+        self._engine = engine
+        self._settings = settings
+        self._sender = sender
+
+    def create_workers(self) -> Sequence[Any]:
+        if self._engine is None or self._sender is None:
+            return ()
+        from app.core.health_report import HealthReportService
+        return [HealthReportService(engine=self._engine, settings=self._settings,
+                                    sender=self._sender)]
 
 
 class SlangFeature(FeatureModule):

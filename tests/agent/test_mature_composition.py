@@ -536,12 +536,12 @@ async def test_native_public_prompt_and_persona_tool_include_all_voice_examples(
 
 @pytest.mark.asyncio
 async def test_native_scheduler_persisted_goal_wakes_without_fixed_social_interval(sqlite_engine, tmp_path):
-    client, requests, _ = model_steps(("schedule_wakeup", {"goal": "稍后继续核对星空主题", "delay_seconds": 15}), None,
+    client, requests, _ = model_steps(("schedule_wakeup", {"goal": "稍后继续核对星空主题", "delay_seconds": 180}), None,
         ("read_work_note", {}), ("remember_intention", {"goal": "星空主题", "progress": "已在到期目标唤醒中继续", "next_step": "暂时等待"}), None)
     async with composed(sqlite_engine, tmp_path, client, runtime="harness", options={"max_steps": 8}) as fixture:
         await scheduled_wake(fixture)
         initial_count = len(requests)
-        fixture.clock[0] += timedelta(seconds=16)
+        fixture.clock[0] += timedelta(seconds=181)
         await fixture.agent.tick(fixture.clock[0])
         assert len(requests) > initial_count
         assert "稍后继续核对星空主题" in json.dumps(requests[initial_count], ensure_ascii=False)
@@ -565,7 +565,7 @@ async def test_native_dormant_group_goals_wait_without_periodic_or_paid_polling(
             next_due=fixture.clock[0] + timedelta(seconds=15), status="waiting")
         await fixture.agent.tick(fixture.clock[0])
         assert requests == []
-        fixture.clock[0] += timedelta(seconds=16)
+        fixture.clock[0] += timedelta(seconds=181)
         await fixture.agent.tick(fixture.clock[0])
         assert len(requests) == 2
         assert "由已授权事件保存的长期兴趣" in json.dumps(requests[0], ensure_ascii=False)

@@ -27,6 +27,7 @@ from app.core.persona_switch import PersonaManager, PersonaSwitchService
 from app.core.reply_policy import ReplyPolicy
 from app.core.router import InboundRouter
 from app.main import (
+    build_fuzzy_recall_service,
     build_group_image_llm_client,
     build_group_image_reference_planner_client,
     build_group_image_service,
@@ -35,6 +36,7 @@ from app.main import (
     build_memory_runtime,
     build_music_identification_service,
     build_proactive_judge_client,
+    build_reverse_image_searcher,
     build_usage_recorder,
     build_web_search_client,
     create_runtime_banner,
@@ -452,6 +454,7 @@ async def run() -> None:
             settings=settings, llm_client=llm_client, sender=sender,
             web_search_client=web_search_client,
         )
+        reverse_image_searcher = build_reverse_image_searcher(settings=settings)
         memory_runtime = await asyncio.to_thread(
             build_memory_runtime,
             settings=settings,
@@ -545,6 +548,7 @@ async def run() -> None:
         from app.agent.plugins.affinity import AffinityFeature
         from app.agent.plugins.builtin import (
             DiaryFeature,
+            HealthReportFeature,
             MemoryDecayFeature,
             MoodFeature,
             SlangFeature,
@@ -592,6 +596,8 @@ async def run() -> None:
         )
         silence_learning_feature = SilenceLearningFeature()
         silence_learning_feature.attach(engine=engine, settings=settings)
+        health_report_feature = HealthReportFeature()
+        health_report_feature.attach(engine=engine, settings=settings, sender=sender)
         reminder_feature = ReminderFeature()
         reminder_feature.attach(engine=engine, sender=sender)
         diary_feature.attach(engine=engine, settings=settings, llm_client=llm_client,
@@ -616,6 +622,7 @@ async def run() -> None:
             trait_evolution_feature,
             silence_learning_feature,
             reminder_feature,
+            health_report_feature,
             PokeFeature(),
             WelcomeFeature(),
             ChatSummaryFeature(),
@@ -640,6 +647,8 @@ async def run() -> None:
             private_chat_service=None,
             group_image_service=group_image_service,
             music_identification_service=music_identification_service,
+            fuzzy_recall_service=build_fuzzy_recall_service(
+                settings=settings, llm_client=llm_client, engine=engine),
             memory_compaction_service=memory_compaction_service,
             memory_orchestrator=memory_runtime.memory_orchestrator,
             persona_manager=persona_manager,
@@ -702,7 +711,8 @@ async def run() -> None:
             from app.adapters.account_profile import AccountProfileAdapter
             participation_planner.autonomous_executor = AutonomousSocialExecutor(
                 router=router, sender=sender, qzone_adapter=QzoneAdapter(gateway), decision_client=llm_client,
-                image_service=group_image_service, profile_adapter=AccountProfileAdapter(gateway,
+                image_service=group_image_service, reverse_image_searcher=reverse_image_searcher,
+                profile_adapter=AccountProfileAdapter(gateway,
                     account_id=settings.bot_qq, allowed_group_ids=tuple(enabled_group_ids),
                     media_roots=((settings.data_dir / "autonomous_artifacts").resolve(),)))
             participation_planner.owns_autonomous_executor = True
