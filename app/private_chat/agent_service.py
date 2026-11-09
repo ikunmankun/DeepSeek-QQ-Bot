@@ -81,8 +81,11 @@ def _mark_completed_media_request(receipts, source_id, result):
 class PrivateHarnessService:
     job_type = "private_agent_turn"
 
-    def __init__(self, service, *, settings, gateway=None, runtime=None, runtime_factory=HarnessToolAgent, clock=None):
+    def __init__(self, service, *, settings, gateway=None, runtime=None, runtime_factory=HarnessToolAgent, clock=None,
+                 reverse_image_searcher=None, fuzzy_recall_service=None):
         self.service, self.settings, self.gateway = service, settings, gateway
+        self.reverse_image_searcher = reverse_image_searcher
+        self.fuzzy_recall_service = fuzzy_recall_service
         self.engine, self.account_id = service.engine, settings.bot_qq
         self.clock = clock or (lambda: datetime.now(UTC))
         self.runtime = runtime
@@ -829,6 +832,28 @@ class PrivateHarnessService:
                 guard.require_valid()
                 return ToolOutcome({'messages':value, 'kind':'private_inbound_history'})
 
+            async def search_private_image(args):
+                guard.require_valid()
+                if self.reverse_image_searcher is None:
+                    return ToolOutcome({'error': 'reverse_image_search_disabled'}, 'blocked')
+                owned = self._owned_input_images(tuple(event.images), user_id, source_id)
+                if not owned:
+                    return ToolOutcome({'error': 'no_owned_image_in_current_message',
+                        'guidance': '把要搜的图和请求放在同一条消息里发来'}, 'blocked')
+                from app.core.reverse_image_search import hit_to_payload
+                def run_search():
+                    return [hit_to_payload(hit) for hit in
+                            self.reverse_image_searcher.search(Path(owned[0].local_path))]
+                try:
+                    hits = await self.tool_runner.run(run_search)
+                except Exception:
+                    guard.require_valid()
+                    return ToolOutcome({'error': 'reverse_image_search_failed'}, 'failed')
+                guard.require_valid()
+                return ToolOutcome({'hits': hits,
+                    'guidance': '没搜到就直说没搜到，绝不编出处；报最可信的一条并附链接，series_url 是同系列/相似图入口，similarity 低于60就说不确定。'},
+                    'ok' if hits else 'failed')
+
             async def schedule(args):
                 guard.require_valid()
                 result = self._enqueue(user_id=user_id, source_id=source_id, private_scope=payload["private_scope"],
@@ -924,6 +949,34 @@ class PrivateHarnessService:
                 AgentTool("schedule_private_wakeup", "保存当前用户的提醒/继续目标，到期唤醒Agent决定是否发送", _schema(goal=_text(500), delay_seconds={"type": "integer", "minimum": 1, "maximum": 604800}), schedule),
                 AgentTool("list_private_wakeups", "读取当前用户的持久提醒及状态", _schema(), list_wakeups),
                 AgentTool("cancel_private_wakeup", "取消当前用户尚未执行的提醒", _schema(task_id={"type": "integer", "minimum": 1, "maximum": 2**63 - 1}), cancel_wakeup)]
+            if self.reverse_image_searcher is not None:
+                tools.append(AgentTool('search_private_image',
+                    '以图搜图：把当前用户刚发来的图拿去搜来源和同系列（pixiv/画师/番剧集数）。对方发图问"这是哪来的""出处""求同款"时用；图必须和请求同一条消息。同步出结果',
+                    _schema(), search_private_image))
+            if self.fuzzy_recall_service is not None:
+                async def fuzzy_recall(args):
+                    guard.require_valid()
+                    description = str(args.get('description') or '').strip()
+                    if not description:
+                        return ToolOutcome({'error': 'empty_description'}, 'blocked')
+                    def run_recall():
+                        return self.fuzzy_recall_service.recall(description, group_ids=None,
+                            private_user_id=user_id)
+                    try:
+                        value = await self.tool_runner.run(run_recall)
+                    except Exception:
+                        guard.require_valid()
+                        return ToolOutcome({'error': 'fuzzy_recall_failed'}, 'failed')
+                    guard.require_valid()
+                    hits = value.get('hits') or ()
+                    return ToolOutcome({**value,
+                        'guidance': '这些是记忆和聊天记录里的候选，不是定论：先用内容+时间帮用户确认，别报source_id这种内部编号。'
+                                    '记忆全空且给了web_hints时，才拿候选名去web_search验证；验证不了就承认想不起来，别编。'},
+                        'ok' if hits else 'failed')
+                tools.append(AgentTool('fuzzy_recall',
+                    '模糊记忆检索：用户"话到嘴边想不起名字"时用——只记得画风/角色长相/玩法这类特征，'
+                    '从自己的记忆、所有群的聊天记录、这个人发过的私聊、人生笔记里把候选内容找出来。描述写特征就行，越具体越好。同步出结果',
+                    _schema(description=_text(400)), fuzzy_recall))
             from app.agent.self_activity import build_self_activity_tool
             tools.append(build_self_activity_tool(self.effects, self.tool_runner, guard))
             if self.service.web_search_client is not None:
@@ -1052,6 +1105,12 @@ class PrivateHarnessService:
                 return ToolOutcome(result, 'blocked' if result['status'] == 'blocked' else 'ok')
 
             tools.append(delegation_tool(delegate_research))
+            # 自改 V1：私聊所有人可见同一份清单（清单一致性约定），owner 工具在
+            # handler 里按 actor==owner 拦截；群聊永不注册（防注入）。
+            from app.core.selfmod import SelfModStore, build_selfmod_tools
+            tools.extend(build_selfmod_tools(store=SelfModStore(self.settings.data_dir),
+                actor_id=user_id, owner_qq=self.service.owner_qq,
+                runner=self.tool_runner))
             prompt = ["System persona: " + self.service._private_daily_persona_text(),
                 'Group policy: ' + serious_request_policy(),
                 'Group policy: ' + WEB_REQUEST_POLICY,
