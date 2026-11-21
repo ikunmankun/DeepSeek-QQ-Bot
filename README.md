@@ -120,6 +120,26 @@ QQ 管理页、登录桌面、隐藏启动和中文监控别名在 `infra/wsl/wi
 聊天和产物保存在本地持久卷，但被选中的消息、记忆及图片会提交给你配置的服务。模型、搜索、
 绘图和部分更新可能产生费用。
 
+## 素材、数据与致谢
+
+本项目在滚动开发中借鉴/使用了下列第三方素材与数据，按用途列出（标注"不随仓库分发"的
+条目只存在于本地运行环境，克隆仓库不会得到它们）：
+
+| 素材 / 数据 | 来源与许可 | 用途 | 是否随仓库分发 |
+|---|---|---|---|
+| 工程骨架（消息路由、Harness 适配、插件协议） | [Komachi-qq-aibot](https://github.com/MagicIndex135731/Komachi-qq-aibot) · MIT | 项目基座，见开篇致谢 | 是（经大幅改造） |
+| 桌宠 Electron 壳 + 114 段透明 webm 动画 | [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) · MIT | 桌面宠物的身体与动作库；本项目用 `pet_bridge.py` 把 bot 真实状态喂给它（"身体归它，灵魂归我们"） | 否（二进制本地安装） |
+| 真人对话语料 | [PersonalDialog](https://ai.tencent.com/ailab/nlp/dialogue/)（腾讯 AI Lab） | 风格规则蒸馏与真人接法向量库的数据源，遵循官方条款 | 否（本地 `datasets/`，克隆不含） |
+| 表情包图源 | 梗鲸站 CDN（`img.aigengtu.com`） | 表情库（`memes/`，卷挂载运行资产） | 否 |
+| 「鲸鱼娘 / 大肥鱼」形象 | DeepSeek 社区二创拟人形象（非官方） | 角色设定来源；本仓库内的立绘、三视图与桌宠模型为 AI 自制素材 | 部分（自制素材随仓库） |
+| 人格与授权边界的设计思路 | [fumingyang2004/Tulpa](https://github.com/fumingyang2004/Tulpa) | 持续群聊、人格与资料授权边界的参考 | — |
+
+运行依赖与服务（不随仓库分发，部署时自行配置）：DeepSeek Harness SDK、OneBot 11 桥
+（NapCat / LLBot / SnowLuma）、[FastEmbed](https://github.com/qdrant/fastembed) +
+BAAI/bge-small-zh-v1.5 本地向量模型、sqlite-vec、小米 MiMo TTS（语音条）、
+[Open-Meteo](https://open-meteo.com/)（天气）、SauceNao（以图搜图）、auDD（听歌识曲）、
+梗鲸站（识梗与图源）。一并感谢上述项目的作者与社区。
+
 ## 许可
 
 小町自主代码采用 [MIT License](LICENSE)；本项目在其基础上延续 MIT 协议。
