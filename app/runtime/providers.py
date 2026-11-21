@@ -174,6 +174,86 @@ def build_llm_client(*, settings: AppSettings, engine, client_factory=LlmClient)
     )
 
 
+def build_decision_client_variant(*, settings: AppSettings, primary, reasoning_effort: str):
+    """主决策 client 的按-effort 变体：只换思考档位，其余照抄主档装配。
+
+    harness 每回合新建 HarnessToolAgent，`_forward` 写 body 时读的就是
+    当回合 client 的 reasoning_effort（harness_runtime.py），所以按档位给
+    变体实例即可实现 per-turn 思考深度。变体共享主 client 的连接池、用量
+    统计和工具事件日志；模型名经 resolve_reasoning_model 按 effort 重算，
+    gemini 的 effort→模型别名映射在构造期天然正确。
+    """
+    if not isinstance(primary, LlmClient):
+        return None
+    try:
+        chat_model = resolve_primary_chat_completions_model(
+            model=settings.llm_model,
+            fallback_model=settings.llm_fallback_model,
+        )
+        fallback_model = (settings.llm_fallback_model or "").strip()
+        if fallback_model == chat_model:
+            fallback_model = ""
+        return LlmClient(
+            base_url=settings.llm_base_url,
+            api_key=settings.llm_api_key,
+            model=chat_model,
+            fallback_model=fallback_model,
+            vision_model=(settings.llm_vision_model or "").strip(),
+            responses_model=chat_model,
+            responses_only=True,
+            image_responses_model=chat_model,
+            builtin_web_search=settings.llm_builtin_web_search and not _uses_wyzlab_alpha_search(settings),
+            web_search_context_size=settings.llm_builtin_web_search_context_size,
+            web_search_model=settings.llm_web_search_model,
+            reasoning_effort=reasoning_effort,
+            max_output_tokens=settings.llm_max_output_tokens,
+            timeout_seconds=settings.llm_timeout_seconds,
+            http_client=primary.http_client,
+            usage_recorder=primary.usage_recorder,
+            tool_event_recorder=primary.tool_event_recorder,
+        )
+    except Exception:
+        # 变体构建失败就退回主档（少一档思考深度，不影响回复主链路）。
+        # settings 访问也必须在 try 里：测试/降级场景的 settings 可能是
+        # 缺 LLM 字段的替身，绝不能因此打死整个聊天回合。
+        return None
+
+
+class DecisionClientVariants:
+    """按 reasoning effort 缓存的决策 client 变体（思考深度路由用）。
+
+    client 构造无 IO，缓存只是避免同一档位反复重建；会话状态
+    （harness session / previous_response_id）不依赖变体实例，切换档位
+    不会断链。测试假 client（非 LlmClient）一律回落主实例。
+    """
+
+    def __init__(self, *, settings: AppSettings, primary) -> None:
+        self._settings = settings
+        self._primary = primary
+        self._cache: dict[str, LlmClient] = {}
+
+    def for_effort(self, effort: str | None):
+        """按档位取 client；None/空/与主档位相同/构建失败 → None（调用方回落主实例）。"""
+
+        if not effort:
+            return None
+        if getattr(self._primary, "reasoning_effort", None) == effort:
+            return None
+        if not isinstance(self._primary, LlmClient):
+            return None
+        variant = self._cache.get(effort)
+        if variant is None:
+            variant = build_decision_client_variant(
+                settings=self._settings,
+                primary=self._primary,
+                reasoning_effort=effort,
+            )
+            if variant is None:
+                return None
+            self._cache[effort] = variant
+        return variant
+
+
 def build_proactive_judge_client(
     *, settings: AppSettings, llm_client, engine=None, client_factory=LlmClient
 ):
@@ -461,6 +541,58 @@ def build_music_identification_service(*, settings: AppSettings, llm_client, sen
         queue_capacity=int(getattr(settings, "music_id_queue_capacity", 4) or 4),
         timeout_seconds=float(getattr(settings, "music_id_timeout_seconds", 240.0) or 240.0),
     )
+
+
+def build_reverse_image_searcher(*, settings: AppSettings):
+    """REVERSE_IMAGE_PROVIDERS=off（或解析后链为空）时返回 None：工具不注册
+    （对齐识曲/TTS 开关约定）。"""
+    from app.core.proxy_routing import resolve_vpn_hosts
+    from app.core.reverse_image_search import ReverseImageSearcher, resolve_provider_chain
+    saucenao_token = str(getattr(settings, "reverse_image_saucenao_token", "") or "")
+    chain = resolve_provider_chain(
+        str(getattr(settings, "reverse_image_providers", "") or ""),
+        saucenao_token=saucenao_token)
+    if not chain:
+        return None
+    return ReverseImageSearcher(
+        providers=chain, saucenao_token=saucenao_token,
+        timeout_seconds=float(getattr(settings, "reverse_image_timeout_seconds", 15.0) or 15.0),
+        vpn_proxy_url=str(getattr(settings, "vpn_proxy_url", "") or ""),
+        vpn_hosts=resolve_vpn_hosts(str(getattr(settings, "vpn_proxy_hosts", "") or "")),
+    )
+
+
+def build_fuzzy_recall_service(*, settings: AppSettings, llm_client, engine):
+    """模糊记忆检索：只读查询，无凭证依赖，恒可用。"""
+    from app.core.fuzzy_recall import FuzzyRecallService
+    return FuzzyRecallService(engine=engine, settings=settings, llm_client=llm_client)
+
+
+def build_voice_asr_settings(settings: AppSettings):
+    """语音转文字凭证检查：三件套缺失返回 None（功能隐藏，对齐识曲约定）。
+    返回 (app_id, api_key, api_secret, accent, language, timeout) 元组。"""
+    provider = (str(getattr(settings, "voice_asr_provider", "") or "")).strip().lower()
+    if provider == "off":
+        return None
+    creds = tuple(str(getattr(settings, name, "") or "").strip()
+                  for name in ("voice_asr_app_id", "voice_asr_api_key", "voice_asr_api_secret"))
+    if not all(creds):
+        return None
+    return (*creds,
+            str(getattr(settings, "voice_asr_accent", "") or "mandarin"),
+            str(getattr(settings, "voice_asr_language", "") or "zh_cn"),
+            float(getattr(settings, "voice_asr_timeout_seconds", 30.0) or 30.0))
+
+
+def build_chart_vision_settings(settings: AppSettings):
+    """图表精读的视觉通道：base_url/api_key/model 任一缺失返回 None（工具隐藏）。"""
+    base_url = str(getattr(settings, "chart_vision_base_url", "") or "").strip()
+    api_key = str(getattr(settings, "chart_vision_api_key", "") or "").strip()
+    model = str(getattr(settings, "chart_vision_model", "") or "").strip()
+    if not (base_url and api_key and model):
+        return None
+    return (base_url, api_key, model,
+            float(getattr(settings, "chart_vision_timeout_seconds", 60.0) or 60.0))
 
 
 def _build_query_rewrite_provider(

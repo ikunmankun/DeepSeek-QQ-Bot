@@ -305,6 +305,7 @@ class LlmClient:
         tools: list[dict[str, Any]] | None = None,
         extra_input_items: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
+        reasoning_effort: str | None = None,
         preloaded_image_parts: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         prompt_part: dict[str, Any] = {
@@ -355,8 +356,15 @@ class LlmClient:
             payload["instructions"] = "\n\n".join(instructions)
         if previous_response_id:
             payload["previous_response_id"] = previous_response_id
-        if self.reasoning_effort:
-            payload["reasoning"] = {"effort": self.reasoning_effort}
+        # Per-call effort 覆盖（None=沿用构造档位；""=这次不发 reasoning 键，
+        # 即关闭深度思考）。会话状态（previous_response_id 映射）仍归本实例，
+        # 所以直连多轮对话切档不断链。
+        resolved_effort = (
+            self.reasoning_effort if reasoning_effort is None
+            else self._normalize_reasoning_effort(reasoning_effort)
+        )
+        if resolved_effort:
+            payload["reasoning"] = {"effort": resolved_effort}
         if max_output_tokens is not None:
             payload["max_output_tokens"] = max_output_tokens
         resolved_temperature = (
@@ -1093,6 +1101,7 @@ class LlmClient:
         seen_reasoning_keys: set[str] = set()
         function_items: dict[str, dict[str, Any]] = {}
         argument_events: list[dict[str, Any]] = []
+        truncated_error: ResponsesProviderError | None = None
 
         def append_function_call(item: dict[str, Any]) -> None:
             if not isinstance(item, dict) or item.get("type") != "function_call":
@@ -1143,6 +1152,15 @@ class LlmClient:
             self._log_responses_tool_event(payload, response_id=response_id)
             error = self._responses_terminal_error(payload)
             if error is not None:
+                if (error.event == "response.incomplete" and error.code == "max_output_tokens"
+                        and not function_calls):
+                    # Output budget exhausted mid-answer: text deltas already
+                    # streamed are usable partial output, so salvage them
+                    # instead of discarding the whole turn. Tool-call
+                    # truncation is not salvageable (arguments may be cut
+                    # mid-signature), and no text at all keeps the old raise.
+                    truncated_error = error
+                    break
                 raise error
             item = payload.get("item")
             if isinstance(item, dict):
@@ -1206,6 +1224,13 @@ class LlmClient:
         extracted_text = completed_text or "".join(
             done_texts.get(key) or "".join(pieces.get(key, [])) for key in answer_keys
         ) or None
+        if truncated_error is not None:
+            if not extracted_text:
+                raise truncated_error
+            logger.warning(
+                "responses_max_output_tokens_salvaged model=%s chars=%s",
+                model, len(extracted_text),
+            )
         usage = self._extract_responses_usage({"usage": usage_payload}, model=model) if usage_payload else None
         return ResponsesStreamResult(
             text=extracted_text,
@@ -2175,6 +2200,7 @@ class LlmClient:
         force_web_search: bool = False,
         allow_web_search: bool | None = None,
         temperature: float | None = None,
+        reasoning_effort: str | None = None,
     ) -> str:
         """Run a bounded Responses function-calling loop and return final text.
 
@@ -2192,6 +2218,7 @@ class LlmClient:
                 force_web_search=force_web_search,
                 allow_web_search=allow_web_search,
                 temperature=temperature,
+                reasoning_effort=reasoning_effort,
             )
         instructions, input_lines = self._split_prompt_lines(prompt_lines)
         effective_rounds = max(1, int(max_tool_rounds))
@@ -2207,6 +2234,7 @@ class LlmClient:
                 force_web_search=force_web_search and not search_degraded,
                 allow_web_search=False if search_degraded else allow_web_search,
                 temperature=temperature,
+                reasoning_effort=reasoning_effort,
             )
 
         def request_with_tools(*, model: str) -> ResponsesStreamResult:
@@ -2222,6 +2250,7 @@ class LlmClient:
                 tools=tools,
                 extra_input_items=extra_input_items,
                 temperature=temperature,
+                reasoning_effort=reasoning_effort,
             )
             if search_degraded:
                 payload = self._degrade_responses_web_search_payload(payload)
@@ -2427,6 +2456,7 @@ class LlmClient:
         force_web_search: bool = False,
         allow_web_search: bool | None = None,
         temperature: float | None = None,
+        reasoning_effort: str | None = None,
     ) -> str:
         instructions, input_lines = self._split_prompt_lines(prompt_lines)
 
@@ -2450,6 +2480,7 @@ class LlmClient:
                 allow_web_search=allow_web_search,
                 max_output_tokens=self.max_output_tokens,
                 temperature=temperature,
+                reasoning_effort=reasoning_effort,
             )
             try:
                 responses_result = self._request_responses_stream_result(
@@ -2478,6 +2509,7 @@ class LlmClient:
                         force_web_search=force_web_search,
                         allow_web_search=allow_web_search,
                         max_output_tokens=self.max_output_tokens,
+                        reasoning_effort=reasoning_effort,
                     )
                     try:
                         responses_result = self._request_responses_stream_result(

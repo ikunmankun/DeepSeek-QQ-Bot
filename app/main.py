@@ -151,6 +151,16 @@ def build_reverse_image_searcher(*, settings: AppSettings):
     return _provider_composition.build_reverse_image_searcher(settings=settings)
 
 
+def build_voice_asr_settings(*, settings: AppSettings):
+    """Compatibility facade; implementation lives in app.runtime."""
+    return _provider_composition.build_voice_asr_settings(settings=settings)
+
+
+def build_chart_vision_settings(*, settings: AppSettings):
+    """Compatibility facade; implementation lives in app.runtime."""
+    return _provider_composition.build_chart_vision_settings(settings=settings)
+
+
 def _build_query_rewrite_provider(*, settings: AppSettings, llm_client, engine=None):
     """Compatibility facade; implementation lives in app.runtime."""
     return _provider_composition._build_query_rewrite_provider(

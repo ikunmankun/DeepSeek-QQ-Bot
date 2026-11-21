@@ -44,6 +44,28 @@ _MEANING_SPLIT = "||"
 
 _TAG_SPLIT = re.compile(r"[_、,，;；\s]+")
 
+#: 坏输出模式：模型给汉字插递增序号（"反(1)差(2)_催(4)更(5)"）。出现两处
+#: 及以上就整体剥掉 (数字)，避免标签和含义被编号污染。
+_CHAR_INDEX_PATTERN = re.compile(r"\(\d+\)")
+
+
+def _strip_char_index_noise(text: str) -> str:
+    if not text:
+        return text
+    found = _CHAR_INDEX_PATTERN.findall(text)
+    if len(found) < 2:
+        return text
+    return _CHAR_INDEX_PATTERN.sub("", text).strip("。．.！!？?~～ ")
+
+#: 视觉打标的输出预算。推理模型（如 deepseek-flash）会先烧掉一段
+#: reasoning 再吐 content：200 会全部耗在思考里（finish=length、
+#: content 恒空），实测 ~1400 才能稳定拿到完整"标签||含义"。
+TAG_MAX_TOKENS = 1400
+
+#: 空含义 sidecar 的重打次数上限：防"每轮空烧视觉调用"的死循环复发。
+#: 达到上限后这张图就保持占位，等模型/网络真正恢复再人工清零。
+EMPTY_MEANING_RETRY_CAP = 3
+
 
 class StickerLearner:
     """收藏与打标；目录约定：<data_dir>/sticker_library/learned/。"""
@@ -117,21 +139,35 @@ class StickerLearner:
                         {"type": "image_url", "image_url": {"url": data_url}},
                     ],
                 }],
-                "max_tokens": 200,
+                "max_tokens": TAG_MAX_TOKENS,
                 "temperature": 0.3,
             },
-            timeout=60.0,
+            timeout=90.0,
         )
         response.raise_for_status()
-        raw = str(response.json()["choices"][0]["message"]["content"] or "").strip()
+        payload = response.json()
+        message = payload.get("choices", [{}])[0].get("message", {})
+        raw = str(message.get("content") or "").strip()
+        if not raw:
+            # 推理模型偶发 content 空但 reasoning 尾部已给出结论：只认
+            # "标签_标签||含义"格式（标签段必须带下划线），否则宁失败重试。
+            reasoning = str(message.get("reasoning_content") or "").strip()
+            tail = reasoning[-200:].replace("\n", " ").strip()
+            candidates = re.findall(
+                r"([^\s|，。：:]{2,30}_[^\s|，。：:]{1,28})\|\|", tail)
+            if candidates:
+                raw = (candidates[-1] + _MEANING_SPLIT
+                       + tail.rsplit(_MEANING_SPLIT, 1)[-1].strip())
         meaning = ""
         if _MEANING_SPLIT in raw:
             raw, _, meaning_raw = raw.partition(_MEANING_SPLIT)
-            meaning = re.sub(r"[\r\n]", "", meaning_raw).strip("。．.！!？?~～ ")[:40]
-        tags = _TAG_SPLIT.split(raw)
+            meaning = _strip_char_index_noise(
+                re.sub(r"[\r\n]", "", meaning_raw).strip("。．.！!？?~～ "))[:40]
+        tags = _TAG_SPLIT.split(_strip_char_index_noise(raw))
         cleaned = []
         for part in tags[:3]:
-            tag = re.sub(r'[\\/:*?"<>|\r\n]', "", part).strip("。．.！!？?~～ ")[:8]
+            tag = _strip_char_index_noise(
+                re.sub(r'[\\/:*?"<>|\r\n]', "", part).strip("。．.！!？?~～ ")[:8])
             if tag and tag not in cleaned:
                 cleaned.append(tag)
         if not cleaned:
@@ -177,13 +213,16 @@ class StickerTaggingService:
                  interval_seconds: float = 600.0,
                  memes_dir: Path | None = None,
                  meme_meanings_dir: Path | None = None,
-                 memes_batch_per_tick: int = 4) -> None:
+                 memes_batch_per_tick: int = 4,
+                 client_factory: Any = None) -> None:
         self.learner = learner
         self.settings = settings
         self.interval_seconds = float(interval_seconds)
         self.memes_dir = Path(memes_dir) if memes_dir else None
         self.meanings_dir = Path(meme_meanings_dir) if meme_meanings_dir else None
         self.memes_batch_per_tick = int(memes_batch_per_tick)
+        # 测试可注入 httpx 客户端工厂；生产恒为 httpx.Client。
+        self._client_factory = client_factory or httpx.Client
 
     async def run(self) -> None:
         while True:
@@ -210,35 +249,99 @@ class StickerTaggingService:
             return None
         return base_url, api_key, model
 
-    def _tag_with_retry(self, client: httpx.Client, path: Path, creds, sidecar_dir: Path | None) -> bool:
+    def _tag_with_retry(self, client: httpx.Client, path: Path, creds,
+                        sidecar_dir: Path | None) -> Exception | None:
+        """两次尝试打标；成功返回 None，失败返回最后一次的异常。"""
+
         base_url, api_key, model = creds
+        last: Exception | None = None
         for attempt in (1, 2):
             try:
                 self.learner.tag_one(path, base_url=base_url, api_key=api_key,
                                      model=model, client=client, sidecar_dir=sidecar_dir)
-                return True
+                return None
             except Exception as exc:
+                last = exc
                 if attempt == 2:
                     logger.warning("sticker_tag_failed file=%s error=%s",
                                    path.name, type(exc).__name__)
-        return False
+        return last
+
+    def _write_sidecar(self, sidecar_dir: Path | None, path: Path,
+                       *, tags: list[str], meaning: str = "",
+                       retry_count: int | None = None) -> None:
+        """落一个标签文件；retry_count 非 None 时记录空含义重打次数。"""
+
+        target = (Path(sidecar_dir) / (path.stem + ".json")) if sidecar_dir is not None \
+            else path.with_suffix(".json")
+        payload = {"tags": "_".join(tags), "meaning": meaning}
+        if retry_count is not None:
+            payload["empty_meaning_retries"] = retry_count
+        target.write_text(json.dumps(payload, ensure_ascii=False),
+                          encoding="utf-8")
+
+    def _sidecar_needs_meaning(self, sidecar: Path) -> bool:
+        """sidecar 存在但 meaning 为空、且还没耗尽重打次数。"""
+
+        try:
+            data = json.loads(sidecar.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return True  # 损坏的 sidecar 视同占位，重打覆盖
+        if str(data.get("meaning") or "").strip():
+            return False
+        return int(data.get("empty_meaning_retries") or 0) < EMPTY_MEANING_RETRY_CAP
+
+    def _fallback_tags_from_filename(self, path: Path) -> list[str]:
+        """memes 编号库的标签就写在文件名里（041_别急_装无辜_画饼.webp），兜底解析。"""
+
+        stem = re.sub(r"^\d+", "", path.stem)
+        cleaned: list[str] = []
+        for part in stem.split("_"):
+            tag = re.sub(r'[\\/:*?"<>|\r\n]', "", part).strip("。．.！!？?~～ ")[:8]
+            if tag and tag not in cleaned:
+                cleaned.append(tag)
+        return cleaned[:3]
 
     def _tick_learned(self) -> int:
-        pending = self.learner.pending_tagging()[:TAG_BATCH_PER_TICK]
+        pending = list(self.learner.pending_tagging()[:TAG_BATCH_PER_TICK])
+        # 已有 sidecar 但 meaning 为空的占位也重打（同一重试上限防死循环）。
+        if self.learner.learned_dir.exists():
+            for path in sorted(self.learner.learned_dir.iterdir()):
+                if len(pending) >= TAG_BATCH_PER_TICK:
+                    break
+                if path.suffix.lower() not in IMAGE_SUFFIXES:
+                    continue
+                sidecar = path.with_suffix(".json")
+                if sidecar.exists() and self._sidecar_needs_meaning(sidecar):
+                    pending.append(path)
         if not pending:
             return 0
         creds = self._vision_credentials()
         if creds is None:
             return 0
         tagged = 0
-        with httpx.Client() as client:
+        with self._client_factory() as client:
             for path in pending:
-                if self._tag_with_retry(client, path, creds, None):
+                failure = self._tag_with_retry(client, path, creds, None)
+                if failure is None:
                     tagged += 1
+                elif isinstance(failure, ValueError):
+                    # 确定性失败（模型输出解析不出标签）：落空标签占位并计数，
+                    # 到 EMPTY_MEANING_RETRY_CAP 为止，不让同一张图每轮空烧。
+                    sidecar = path.with_suffix(".json")
+                    retries = 0
+                    try:
+                        retries = int(json.loads(sidecar.read_text(encoding="utf-8"))
+                                      .get("empty_meaning_retries") or 0)
+                    except (OSError, ValueError):
+                        pass
+                    self._write_sidecar(None, path, tags=[],
+                                        retry_count=retries + 1)
         return tagged
 
     def _tick_memes(self) -> int:
-        """给 memes 编号库补梗含义；已有含义文件的跳过，每轮小批量。"""
+        """给 memes 编号库补梗含义，两档队列：没含义文件的优先，已有文件但
+        meaning 为空的占位也重打（带重试上限）。每轮小批量，不 burst。"""
         if self.memes_dir is None or self.meanings_dir is None:
             return 0
         if not self.memes_dir.exists():
@@ -247,9 +350,11 @@ class StickerTaggingService:
         for path in sorted(self.memes_dir.iterdir()):
             if path.suffix.lower() not in IMAGE_SUFFIXES:
                 continue
-            if (self.meanings_dir / (path.stem + ".json")).exists():
-                continue
-            pending.append(path)
+            sidecar = self.meanings_dir / (path.stem + ".json")
+            if not sidecar.exists():
+                pending.append(path)
+            elif self._sidecar_needs_meaning(sidecar):
+                pending.append(path)
             if len(pending) >= self.memes_batch_per_tick:
                 break
         if not pending:
@@ -258,8 +363,27 @@ class StickerTaggingService:
         if creds is None:
             return 0
         tagged = 0
-        with httpx.Client() as client:
+        with self._client_factory() as client:
             for path in pending:
-                if self._tag_with_retry(client, path, creds, self.meanings_dir):
+                failure = self._tag_with_retry(client, path, creds, self.meanings_dir)
+                if failure is None:
                     tagged += 1
+                    continue
+                if not isinstance(failure, ValueError):
+                    continue  # 网络/服务端错误：不动 sidecar，下轮自然重试
+                # 确定性失败：已有 sidecar 的记录重打次数（到上限为止）；
+                # 没有 sidecar 的落文件名兜底标签占位。
+                sidecar = self.meanings_dir / (path.stem + ".json")
+                if sidecar.exists():
+                    try:
+                        data = json.loads(sidecar.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        data = {}
+                    self._write_sidecar(self.meanings_dir, path,
+                                        tags=str(data.get("tags") or "").split("_"),
+                                        retry_count=int(data.get("empty_meaning_retries") or 0) + 1)
+                else:
+                    self._write_sidecar(self.meanings_dir, path,
+                                        tags=self._fallback_tags_from_filename(path),
+                                        retry_count=1)
         return tagged

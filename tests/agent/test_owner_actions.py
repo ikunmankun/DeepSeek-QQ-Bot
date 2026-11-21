@@ -124,6 +124,40 @@ async def test_scheduled_owner_task_and_notice_remain_on_original_surface(sqlite
     assert len(deliveries)==1 and deliveries[0].user_id==OWNER
     assert await notice.run_once() is None
 
+async def test_group_owner_task_with_tool_receipts_reports_privately(sqlite_engine, tmp_path):
+    """群任务的工作汇报进主人私聊，不再发回原群（2026-11-10 群里泄露5次后的硬规矩）。"""
+    from app.agent.owner_actions import OwnerNoticeWorker, OwnerActionWorker
+    service, router = setup(sqlite_engine, tmp_path)
+    sid = source(sqlite_engine, text='明早八点在群里叫群友起床')
+    task = service.enqueue(sid, target='group', group_id=GROUP, delay_seconds=60, goal='八点整在群里叫人起床')
+    assert service.claim('early-worker', lease_seconds=600) is None
+    service.clock = lambda: NOW + timedelta(seconds=60)
+    class Executor:
+        async def execute_owner_action(self, claim, guard):
+            guard.require_valid()
+            return {'status': 'ok', 'report': {'text': '实际完成：send_group\n已经在群里喊了起床（回执123456789）。'},
+                'receipts': [{'tool': 'send_group', 'status': 'sent'}]}
+    executor = Executor(); executor.router = SimpleNamespace(runtime=router.runtime)
+    worker = OwnerActionWorker(service, executor, connected=lambda: True)
+    assert (await worker.run_once())['status'] == 'ok'
+    private_deliveries, group_deliveries = [], []
+    class Sender:
+        async def send_private_text(self, message):
+            private_deliveries.append(message)
+            return ('synthetic-private-receipt',)
+        async def send_private_image(self, **kwargs):
+            raise AssertionError('bookkeeping notice carries no images')
+        async def send_group_text(self, message):
+            group_deliveries.append(message)
+            return ('synthetic-group-receipt',)
+    notice = OwnerNoticeWorker(service, Sender(), surface='group', connected=lambda: True)
+    assert (await notice.run_once()).status == 'sent'
+    assert group_deliveries == []
+    assert len(private_deliveries) == 1 and private_deliveries[0].user_id == OWNER
+    assert '实际完成' in private_deliveries[0].text and str(GROUP) in private_deliveries[0].text
+    assert await notice.run_once() is None
+
+
 def test_group_cannot_read_private_owner_task_and_cancelled_wakeup_never_claims(sqlite_engine,tmp_path):
     service,_=setup(sqlite_engine,tmp_path)
     private=source(sqlite_engine,group=None,text='私聊专属任务')

@@ -60,6 +60,15 @@ _SECOND_PERSON = re.compile(r"你|您")
 STICKER_HINT_MOODS = frozenset({"annoyed", "smug"})
 STICKER_HINT = "被怼或对方甩图斗图时，优先甩一张表情包（pick_sticker 挑，send_group 发），文字只当配菜。"
 
+#: 情绪强度顶格（intensity >= 1.5）时的行为倾向：副词"顶格"之外再给
+#: 一个具体样子，演起来才不像单纯加大嗓门。
+MOOD_PEAK_NOTES: dict[str, str] = {
+    "smug": "已经飘了，说话带炫耀劲儿，尾巴翘到天上",
+    "annoyed": "火气顶到头上，说话短促带刺，谁再招一下就回怼",
+    "serious": "全力认真模式，回答要准，不许打岔",
+    "sleepy": "困到极限，句子都懒得打全，两个字能说完就不打三个",
+}
+
 #: 斗图节奏引导，常驻：斗图回合必须图接图；纯表情回应裸发就好。
 STICKER_WAR_HINT = (
     "群友在连发表情/图片斗图时：用 pick_sticker 挑一张图接图（send_group 发），"
@@ -233,6 +242,16 @@ def _shanghai_hour(now: datetime) -> int:
     return shanghai_aware(now).hour
 
 
+def mood_intensity_adverb(intensity: float) -> str:
+    """情绪强度 0~2.0 → 三档副词。原来只有有点/相当两档，中间档糊成一片。"""
+
+    if intensity < 1.0:
+        return "有点"
+    if intensity < 1.5:
+        return "相当"
+    return "顶格"
+
+
 def mood_prompt_line(engine, group_id: int, now: datetime) -> str | None:
     """给 agent 提示词的当前情绪行；平静时返回 None（不打扰人设）。"""
 
@@ -244,11 +263,14 @@ def mood_prompt_line(engine, group_id: int, now: datetime) -> str | None:
     if mood == "default":
         return None
     label = MOOD_LABELS.get(mood, mood)
-    level = "有点" if intensity < 1.0 else "相当"
+    level = mood_intensity_adverb(intensity)
+    # 顶格档给一条行为倾向，让"情绪到顶"有具体样子，而不只是副词加码。
+    peak_note = MOOD_PEAK_NOTES.get(mood, "") if intensity >= 1.5 else ""
     origin = f"（起因：{row.reason}）" if row is not None and str(row.reason or "").strip() else ""
     line = (
         f"当前情绪状态：{mood}/{label}，{level}{label}{origin}。"
-        "这是你此刻真实的心理状态，不是让你表演或说出来的东西——"
+        + (f"{peak_note}。" if peak_note else "")
+        + "这是你此刻真实的心理状态，不是让你表演或说出来的东西——"
         "语气按人设里对应状态的样子自然带出来，不要解释自己在闹情绪。"
     )
     if mood in STICKER_HINT_MOODS:

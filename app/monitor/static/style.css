@@ -11,3 +11,4 @@
 @media(max-width:650px){.context-identities{grid-template-columns:1fr;padding:8px 14px;gap:6px}}
 @media(max-width:1320px){.usage-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:8px 16px}.usage-grid strong{font-size:14px}.usage-footer{padding:9px 16px}}
 @media(max-width:650px){.workspace{grid-template-columns:minmax(0,1fr)}.usage-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 12px}.usage-grid strong{font-size:13px}.usage-grid small{font-size:9px}.usage-footer{padding:7px 14px}.usage-coverage{font-size:9px}}
+.map-link{display:inline-block;margin-right:8px;font-size:11px;color:var(--accent);text-decoration:none;border:1px solid var(--line);border-radius:7px;padding:5px 10px}.map-link:hover{background:#303138}

@@ -224,3 +224,146 @@ def test_find_learned_meme_tool_matches_tags_and_meaning(tmp_path):
 
     empty = tool.handler({})
     assert empty.status == "blocked" and empty.data["error"] == "keyword_required"
+
+
+def test_tag_one_falls_back_to_reasoning_tail(tmp_path):
+    """推理模型 content 空、答案在 reasoning 尾部（含 ||）：兜底解析。"""
+    learner = StickerLearner(tmp_path / "data")
+    learner.learned_dir.mkdir(parents=True)
+    img = learner.learned_dir / "rst789.png"
+    img.write_bytes(_png_bytes("teal"))
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {
+                "content": "",
+                "reasoning_content": "思考中……图里是一只躺平的猫，总结：躺平_摆烂||一只猫瘫在键盘上，主打摆烂",
+            }}]}
+
+    class FakeClient:
+        def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    tags = learner.tag_one(img, base_url="http://x", api_key="k", model="m",
+                           client=FakeClient())
+    assert tags == "躺平_摆烂"
+    assert learner.load_meaning(img) == "一只猫瘫在键盘上，主打摆烂"
+
+
+def _make_service(tmp_path, *, responses):
+    from app.core.sticker_learning import StickerLearner, StickerTaggingService
+
+    settings = {"llm_base_url": "http://x", "llm_api_key": "k", "llm_model": "m"}
+    memes = tmp_path / "memes"
+    memes.mkdir()
+    (memes / "100_a_b.webp").write_bytes(_png_bytes("red"))
+    (memes / "101_c_d.webp").write_bytes(_png_bytes("blue"))
+    meanings = tmp_path / "meme_meanings"
+
+    class FakeResponse:
+        def __init__(self, content):
+            self._content = content
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": self._content}}]}
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, *args, **kwargs):
+            content = responses[min(self.calls, len(responses) - 1)]
+            self.calls += 1
+            return FakeResponse(content)
+
+    client = FakeClient()
+    service = StickerTaggingService(learner=StickerLearner(tmp_path / "data"),
+                                    settings=SimpleNamespace(**settings),
+                                    memes_dir=memes, meme_meanings_dir=meanings,
+                                    client_factory=lambda: client)
+    return service, meanings, client
+
+
+def test_tick_memes_retags_empty_meaning_placeholder(tmp_path):
+    """占位（meaning 空）的图要重打，成功后写进真含义。"""
+    from types import SimpleNamespace
+
+    service, meanings, fake_client = _make_service(tmp_path, responses=[
+        "干饭_得意||理直气壮混吃混喝的自嘲"])
+    (meanings).mkdir()
+    (meanings / "100_a_b.json").write_text(
+        json.dumps({"tags": "a_b", "meaning": ""}), encoding="utf-8")
+    tagged = service._tick_memes_with_client(fake_client) if hasattr(service, "_tick_memes_with_client")         else service._tick_memes()
+    assert tagged >= 1
+    data = json.loads((meanings / "100_a_b.json").read_text(encoding="utf-8"))
+    assert data["meaning"] == "理直气壮混吃混喝的自嘲"
+
+
+def test_tick_memes_respects_retry_cap(tmp_path):
+    """重打次数到上限就不再空烧视觉调用。"""
+    from types import SimpleNamespace
+
+    service, meanings, fake_client = _make_service(tmp_path, responses=["垃圾输出"])
+    # 只留这一张到上限的图，别让另一张合法入队的干扰断言
+    (tmp_path / "memes" / "101_c_d.webp").unlink()
+    (meanings).mkdir()
+    (meanings / "100_a_b.json").write_text(
+        json.dumps({"tags": "a", "meaning": "", "empty_meaning_retries": 3}),
+        encoding="utf-8")
+    assert service._tick_memes() == 0
+    assert fake_client.calls == 0
+    data = json.loads((meanings / "100_a_b.json").read_text(encoding="utf-8"))
+    assert data["meaning"] == ""
+
+
+def test_tick_memes_failure_increments_retry_counter(tmp_path):
+    """确定性失败（解析不出标签）：已有 sidecar 只加计数，不写假含义。"""
+    from types import SimpleNamespace
+
+    service, meanings, fake_client = _make_service(tmp_path, responses=[""])
+    (meanings).mkdir()
+    (meanings / "100_a_b.json").write_text(
+        json.dumps({"tags": "a", "meaning": "", "empty_meaning_retries": 0}),
+        encoding="utf-8")
+    service._tick_memes()
+    data = json.loads((meanings / "100_a_b.json").read_text(encoding="utf-8"))
+    assert data.get("empty_meaning_retries") == 1
+    assert data["meaning"] == ""
+
+
+def test_tag_one_strips_char_index_noise(tmp_path):
+    """模型给汉字插递增序号（"反(1)差(2)"）时剥掉编号，保留真词。"""
+    learner = StickerLearner(tmp_path / "data")
+    learner.learned_dir.mkdir(parents=True)
+    img = learner.learned_dir / "noise01.png"
+    img.write_bytes(_png_bytes("maroon"))
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {
+                "content": "反(1)差(2)_催(4)更(5)_吐(6)槽(7)||萌(8)妹(9)自称最残忍的二次元(10)梗(11)",
+            }}]}
+
+    class FakeClient:
+        def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    tags = learner.tag_one(img, base_url="http://x", api_key="k", model="m",
+                           client=FakeClient())
+    assert tags == "反差_催更_吐槽"
+    assert learner.load_meaning(img).startswith("萌妹自称")

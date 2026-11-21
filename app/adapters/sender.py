@@ -47,6 +47,10 @@ class Sender:
     def __init__(self, gateway) -> None:
         self.gateway = gateway
 
+    async def call_api(self, action: str, params: dict) -> dict:
+        """透传 OneBot 动作（如 get_record 取语音文件），与发送共用同一条 WS。"""
+        return await self.gateway.call_api(action, params)
+
     async def send_group_text(self, outbound: OutboundMessage) -> tuple[str, ...]:
         return await self._send_text_message(
             action="send_group_msg",

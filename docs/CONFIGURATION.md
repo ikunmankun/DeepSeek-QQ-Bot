@@ -36,6 +36,10 @@ TZ=Asia/Shanghai
 | 参数 | 用途 |
 |---|---|
 | `LLM_REASONING_EFFORT` | 主文本调用思考强度 |
+| `THINK_DEPTH_ENABLED` | 思考深度路由开关（默认 on）：按消息复杂度动态覆盖当回合 reasoning effort——闲聊秒答（minimal/默认档）、解释与求助想一下（medium）、数学/代码/长推理深思（high）；关闭后全部回合沿用 `LLM_REASONING_EFFORT` |
+| `THINK_DEPTH_ENERGY_COUPLED` | 精力联动（默认 on）：vitality energy < 30 时难题逐级降档演"困了懒得深想"；被点名/主人直接求助豁免降档 |
+| `CORPUS_STYLE_RETRIEVAL_ENABLED` | 语料向量库开关（默认 on）：回复时按当前消息检索 PersonalDialog 蒸馏的"相似情境下真人接法"注入风格参考（只学长度节奏，内容禁照抄）；需先建库（`scripts/build_corpus_vector_store.py`），未建库自动零注入 |
+| `CORPUS_STYLE_MAX_EXAMPLES` / `CORPUS_STYLE_MIN_COSINE` | 每回合注入的语料例句上限（1-3，默认 2）与语义相似度阈值（默认 0.60） |
 | `LLM_SUPPORTS_VISION_INPUT` / `LLM_VISION_MODEL` | 是否发送真实像素、可选独立视觉模型 |
 | `LLM_CONTEXT_WINDOW_TOKENS` / `LLM_MAX_OUTPUT_TOKENS` | 模型窗口与输出预算；须与实际模型匹配 |
 | `GROUP_AGENT_ENABLED` / `AGENT_RUNTIME` | 默认持续群 Agent / `harness`；legacy 用于显式回退 |
@@ -98,6 +102,30 @@ groups:
 私聊与群聊进程分离。私聊用于对话、资料/图片相关能力以及主人对已启用工具的委派，不提供宿主 Shell、远程文件或项目控制。工具许可仍按使用者/作用域细分，私聊准入不等于取得主人权限。
 
 主人可从消息请求切换已配置群人格、执行已启用空间/资料/计算等动作，行为结果回原会话。主人指令不占主动行为冷却/次数；不绕过许可名单、来源复验、单轮模型预算、未知回执规则和平台限制。
+
+### 主动私聊搭话与天气
+
+私聊进程内置主人搭话 worker（`OWNER_CHITCHAT_ENABLED`，默认开）：早安窗口报天气 + 闲聊窗口主动起话头，话题材料来自日记里的B站发现与天气实况。所有动作落 `owner_chitchat` 任务表（天级去重、重启不重发），安静时段 23:00-08:00（上海）顺延，主人最近发过私聊（正在聊）时不插话，错过窗口太久不补发过期话题。主人私聊走 `dafy_sweet`（甜心肥鱼）人格，其他私聊用户维持默认人格；群里形象不变。
+
+| 参数 | 说明 |
+|---|---|
+| `OWNER_CHITCHAT_MORNING_WINDOW` | 早安+天气窗口，`HH:MM-HH:MM`，窗口内随机抖动；默认 `08:10-08:50` |
+| `OWNER_CHITCHAT_WINDOWS` | 闲聊窗口，逗号分隔多个 `HH:MM-HH:MM`；默认 `12:40-14:30,15:40-17:20,19:00-20:40,20:40-22:30` |
+| `OWNER_CHITCHAT_MAX_DAILY` | 闲聊每日上限（不含早报）；默认 4 |
+| `OWNER_CHITCHAT_MIN_GAP_MINUTES` | 两次主动搭话最小间隔；默认 150 |
+| `OWNER_CHITCHAT_IDLE_MINUTES` | 主人最近发过私聊多少分钟内不插话；默认 45 |
+| `WEATHER_CITY` / `WEATHER_LAT` / `WEATHER_LON` | 天气城市（Open-Meteo 免费接口按名称 geocoding，支持"广州天河区"这类写法，查不到逐级去后缀重试）；直接给坐标可跳过 geocoding |
+
+### 身体状态模拟（vitality）
+
+私聊和群聊共享一行 `vitality_states` 状态（bot_qq 主键）：饥饿/口渴是难受度（0 刚吃饱，100 顶格），精力是电量（0 困瘫，100 满格）。**读时按流逝分钟推进衰减并落库**，中间时段纯计算；夜里 01:00-07:30 精力自动回复（睡眠），白天缓慢消耗。每个群聊回合和私聊回合的提示词都会注入一行当前身体状态（"Reply style: 你现在的身体状态……"），回复里可以自然带出来，模型被要求不报数值、不每句都提。
+
+群进程的 vitality 插件 worker 按 jobs 表（`job_type=vitality_meal`）排程一日作息：早饭 07:40-08:30、午饭 11:40-12:50、晚饭 18:10-19:20、喝水两次（10 点/15 点档）、夜宵 22:00-23:40。吃饭写日记（tag=干饭/夜宵，菜单随机：白饭是本体）；**夜宵是概率事件**（默认 0.35）且要真饿（饿度 ≥40）才吃；刚通过工具吃过会被冷却挡掉，排程与模型自发的 self_care 工具共用同一状态入口（吃 60 分钟、喝 20 分钟、歇 120 分钟冷却）。`self_care` 工具（eat/drink/rest）在群聊和私聊都可用——模型饿了就去干饭，不用等排餐。错过的餐超过窗口 90 分钟不补吃（作息才真实）。
+
+| 参数 | 说明 |
+|---|---|
+| `VITALITY_ENABLED` | 身体状态模拟总开关，默认 true；关掉只停排程与提示注入 |
+| `VITALITY_SUPPER_PROBABILITY` | 夜宵概率，默认 0.35；达标还需饿度 ≥40 |
 
 ## 搜索、网页与绘图
 

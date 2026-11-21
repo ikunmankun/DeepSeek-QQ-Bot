@@ -63,6 +63,10 @@ services:
       - ${LOCAL_STICKER_HOST_DIR:-/mnt/e/QQ-Bot/memes}:/workspace/memes:ro
       # Alarm voice clips (read-only): reminder worker picks one at random.
       - ${ALARM_SOUND_HOST_DIR:-/mnt/e/QQ-Bot/alarms}:/workspace/alarms:ro
+      # 语音转文字：只读挂 napcat 的 QQ 数据卷（silk 原件）与 cache 卷
+      # （get_record 转码产物），目标路径与 napcat 容器保持一致。
+      - napcat_ntqq:/app/.config/QQ:ro
+      - napcat_cache:/app/napcat/cache:ro
     depends_on:
       napcat:
         condition: service_started
@@ -94,6 +98,9 @@ services:
       - xiaomachi_data:/workspace/data
       - ./private-secrets:/run/xiaomachi-secrets:ro
       - xiaomachi_xhs_session:/workspace/data/xhs-crawler
+      # 语音转文字（私聊语音）：同上，只读挂 napcat 数据卷与 cache 卷
+      - napcat_ntqq:/app/.config/QQ:ro
+      - napcat_cache:/app/napcat/cache:ro
     depends_on:
       napcat:
         condition: service_started

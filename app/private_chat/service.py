@@ -70,7 +70,7 @@ from app.core.search_policy import (
     normalize_relative_time_query,
     parse_search_decision,
 )
-from app.core.time_utils import ASIA_SHANGHAI
+from app.core.time_utils import ASIA_SHANGHAI, shanghai_now_naive
 from app.core.url_policy import (
     explicitly_requests_urls,
     filter_reply_urls,
@@ -178,6 +178,8 @@ class PrivateChatService:
         image_reference_planner_client=None,
         reply_split_config: dict | None = None,
         typing_settings=None,
+        think_depth_enabled: bool = True,
+        think_depth_energy_coupled: bool = True,
         image_model: str = "gpt-image-2",
         image_size: str | None = "auto",
         image_quality: str | None = "high",
@@ -190,6 +192,7 @@ class PrivateChatService:
         image_timeout_seconds: float = 900.0,
         assistant_name: str = "小町",
         persona: dict | None = None,
+        owner_persona: dict | None = None,
         safety: dict | None = None,
     ) -> None:
         self.engine = engine
@@ -222,6 +225,9 @@ class PrivateChatService:
         )
         # 拟人打字延迟的配置来源；不传（测试/旧调用）则延迟恒为 0。
         self.typing_settings = typing_settings
+        # 思考深度路由开关（默认开；private_main 从 AppSettings 接线）。
+        self.think_depth_enabled = bool(think_depth_enabled)
+        self.think_depth_energy_coupled = bool(think_depth_energy_coupled)
         self.private_image_service = PrivateImageGenerationService(
             engine=engine,
             llm_client=self.image_llm_client,
@@ -243,6 +249,9 @@ class PrivateChatService:
         )
         self.assistant_name = assistant_name.strip() or "小町"
         self.persona = dict(persona or {})
+        # 主人私聊专用人格（dafy_sweet 甜心肥鱼）：群聊形象不变，只有私聊主人时
+        # 才切到粘人精版本。没有配置就维持默认人格。
+        self.owner_persona = dict(owner_persona or {})
         self.safety = dict(safety or {})
         self._pending_private_image_turns: dict[
             tuple[int, str],
@@ -855,11 +864,18 @@ class PrivateChatService:
                     private_scope=private_scope,
                     image_count=len(target_images or []),
                     quoted_raw_payload=quoted_raw_payload,
+                    user_id=event.user_id,
+                )
+                # 思考深度路由：按消息复杂度覆盖 reasoning effort（None=沿用
+                # client 固化档位），并把回合档位写进 contextvar 供打字延迟读。
+                private_think_effort = self._turn_think_effort(
+                    request_text, has_image=bool(target_images)
                 )
                 reply_text = self.llm_client.generate_text(
                     prompt_lines,
                     images=target_images,
                     conversation_key=conversation_key,
+                    reasoning_effort=private_think_effort,
                     **self._private_generation_search_kwargs(web_context),
                 )
                 if not reply_text:
@@ -920,13 +936,80 @@ class PrivateChatService:
                 context=f"private_chat:{task_id}:failed",
             )
 
-    def _private_daily_persona_text(self) -> str:
-        if self.persona:
-            return render_persona(self.persona)
+    def _private_persona_for(self, user_id: int | None = None) -> dict:
+        """私聊人格选择：主人走甜心肥鱼（粘人精），其他人维持默认鲸鱼娘。"""
+
+        if user_id is not None and self.owner_persona and user_id == self.owner_qq:
+            return self.owner_persona
+        return self.persona
+
+    def _owner_favorite_line(self) -> str:
+        """甜心人设的"主人是谁"动态行（私聊没有群名片，只报 QQ 号）。"""
+
+        return (
+            f"\n你最喜欢的人是你的主人：QQ 号 {self.owner_qq}。"
+            "TA 一发言你就能认出来，TA 在你心里排第一；"
+            "这份喜欢自然带出来就行，不用每句都挂嘴边。"
+        )
+
+    def _private_daily_persona_text(self, user_id: int | None = None) -> str:
+        persona = self._private_persona_for(user_id)
+        if persona:
+            text = render_persona(persona)
+            if persona.get("favorite_owner") and user_id == self.owner_qq:
+                text += self._owner_favorite_line()
+            return text
         return (
             f"You are {self.assistant_name}. "
             "Speaking tone: natural. Keep replies concise unless asked to expand."
         )
+
+    def _vitality_line(self) -> str | None:
+        """身体状态模拟行：私聊同样知道自己饿不饿困不困（失败自吞）。"""
+
+        try:
+            from app.core import vitality
+
+            return vitality.prompt_line(self.engine, bot_qq=self.bot_qq,
+                                        now=shanghai_now_naive())
+        except Exception:
+            logger.debug("private_vitality_line_failed", exc_info=True)
+            return None
+
+    def _turn_think_effort(self, text: str, *, has_image: bool = False) -> str | None:
+        """思考深度路由：私聊消息一律视为直接求助（主人发来的必须认真答，
+        精力低时豁免降档；简单消息该秒答还是秒答）。回合档位写进 contextvar，
+        发送端的打字延迟（typing_delay_seconds）读它演"想了一会儿才回"。"""
+
+        try:
+            from app.core.think_depth import judge_think_depth, set_turn_effort
+
+            if not self.think_depth_enabled:
+                set_turn_effort("")
+                return None
+            energy = None
+            if self.think_depth_energy_coupled:
+                try:
+                    from app.core import vitality
+
+                    energy = float(vitality.snapshot(self.engine, bot_qq=self.bot_qq,
+                                                     now=shanghai_now_naive()).energy)
+                except Exception:
+                    energy = None
+            decision = judge_think_depth(
+                text,
+                has_image=has_image,
+                explicit_request=True,
+                energy=energy,
+                energy_coupled=self.think_depth_energy_coupled,
+            )
+            logger.info("think_depth_private_legacy effort=%s level=%s reason=%s",
+                        decision.effort, decision.level, decision.reason)
+            set_turn_effort(decision.effort)
+            return decision.effort
+        except Exception:
+            logger.debug("private_think_depth_failed", exc_info=True)
+            return None
 
     def _private_daily_safety_line(self, *, extra_rule: str | None = None) -> str:
         rules = render_safety_lines(self.safety)
@@ -938,17 +1021,21 @@ class PrivateChatService:
             rules.append(extra_rule)
         return "Safety rules: " + " ".join(rule for rule in rules if rule)
 
-    def _private_reply_style_lines(self, *, private_scope: str) -> list[str]:
+    def _private_reply_style_lines(self, *, private_scope: str,
+                                   user_id: int | None = None) -> list[str]:
         del private_scope
+        persona = self._private_persona_for(user_id)
+        name = str(persona.get("name", self.assistant_name) or self.assistant_name)
         return [
-            f"Reply style: Stay in {str(self.persona.get('name', self.assistant_name) or self.assistant_name)}'s daily-chat persona.",
+            f"Reply style: Stay in {name}'s daily-chat persona.",
             # Same human/Komachi work-style the group chat runs on; only the
-            # opening line names a direct chat instead of a group.
+            # opening line names a direct chat instead of a group. 主人私聊的
+            # 甜心人设经 chat_voice: clingy 换成软糯粘人分支。
             *build_human_chat_style_lines(
                 proactive_turn=False,
                 komachi_style=True,
                 chat_context="private",
-                voice=str(self.persona.get("chat_voice") or "komachi"),
+                voice=str(persona.get("chat_voice") or "komachi"),
             ),
             "Reply style: If evidence is missing or conflicting, say so plainly instead of smoothing it over.",
         ]
@@ -1324,6 +1411,7 @@ class PrivateChatService:
         private_scope: str,
         image_count: int = 0,
         quoted_raw_payload: dict | None = None,
+        user_id: int | None = None,
     ) -> tuple[list[str], PrivateWebContext]:
         session_summary = self._session_summary(session_id=session_id)
         recent_turns = self._recent_turn_lines(session_id=session_id, exclude_task_id=task_id)
@@ -1355,9 +1443,10 @@ class PrivateChatService:
             if pronoun_referent_note is not None:
                 target_text = f"{target_text}\n{pronoun_referent_note}"
         return [
-            f"System persona: {self._private_daily_persona_text()}",
+            f"System persona: {self._private_daily_persona_text(user_id=user_id)}",
+            *filter(None, (self._vitality_line(),)),
             self._private_daily_safety_line(extra_rule=daily_safety_extra),
-            *self._private_reply_style_lines(private_scope=private_scope),
+            *self._private_reply_style_lines(private_scope=private_scope, user_id=user_id),
             url_reply_policy_instruction(request_text),
             "Current private daily session summary:",
             session_summary or "(none)",

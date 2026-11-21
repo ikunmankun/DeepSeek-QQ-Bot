@@ -284,6 +284,10 @@ systemctl enable --now xiaomachi-sandbox
 
 在私有 `infra/wsl/.env` 设置 `AGENT_MONITOR_ENABLED=true` 并 rebuild，两应用采集从新回合开始。安装/启动会加载可选 `docker-compose.monitor.yml`，独立查看容器根文件系统只读，仅可写挂载数据卷的 `agent_monitor` 子目录且不加载机器人 `.env`。启动脚本先确保该目录存在；Docker需支持卷 `subpath`。浏览器打开 [Agent现场](http://127.0.0.1:8765/)，也可双击根目录 `open-agent-monitor.cmd`；中文别名位于 `infra/wsl/windows/打开Agent监控网页.bat`（使用默认浏览器）。
 
+同一端口还提供 [记忆星图](http://127.0.0.1:8765/memory)：机器人进程按 `MEMORY_MAP_INTERVAL_SECONDS`（默认 300 秒）把活跃记忆的衰减状态（强度＝2^(-未提及天数/半衰期)，半衰期＝基础值×importance×(1+log2(mention_count))）导出到 `data/agent_monitor/memory_map.json`，监控容器只读读取这份快照画图；星图不触发对话、不修改记忆。禁忌/关系/画像/称呼规则与已晋升的身份级记忆标记为永不遗忘。`MEMORY_MAP_ENABLED=false` 可关闭导出。
+
+同一端口还提供 [日记本](http://127.0.0.1:8765/diary)：机器人进程按 `DIARY_MAP_INTERVAL_SECONDS`（默认 300 秒）把 `data/diary` 最近 30 天的日记条目（随手记、逛B站、每晚 23:30 的睡前记小作文）导出到 `data/agent_monitor/diary_map.json`，监控容器只读读取这份快照渲染；日记页不触发对话、不能写日记，也不会把日记发到群里。`DIARY_MAP_ENABLED=false` 可关闭导出。
+
 一键入口先绕过系统代理检查Windows本机健康、页面和会话API；若WSL回环8765存在但Windows localhost转发失联，启动隐藏的Windows查看器，通过 `\\wsl.localhost\Ubuntu_Migrated\...` 处理同一Docker数据卷中的 `agent_monitor`，不复制聊天记录或加载机器人 `.env`。入口核对卷子挂载；兼容旧版整卷只读挂载。WSL仍监听回环8765；Windows优先复用8765，若该端口被系统保留或占用，则由系统分配可用的回环端口。实际端口保存在 `data/agent-monitor-launcher/viewer.json`，入口先验证健康、页面与会话API再复用，并自动打开实际地址；请双击入口，不要固定收藏8765。仅监听本机，不使用7897、不修改系统保留端口或防火墙，也不重启QQ/WSL。入口需本机Python；可用 `XIAOMACHI_MONITOR_PYTHON` 指定已安装的python.exe，默认检测PATH与本机Conda目录。日志在 `data/agent-monitor-launcher/viewer.log`；关闭浏览器不停止查看器。升级删除功能时需重启已运行的旧版Windows查看进程；重启Windows后再次双击入口即可恢复。
 
 左侧选择会话，右侧连续查看触发消息、公开思考摘要/状态、模型请求、工具行动和发送回执。「为什么开始行动」显示@/回复、消息批次、到期目标或后台任务的实际原因；可展开查看来源、队列/任务号和到期时间。回合之间明确标记执行上下文延续或失败后重建；独立审查/委派任务单列。点击每步「查看本次输入」打开实际请求抽屉，按顺序展开历史并对比同一执行会话的上一请求；多次重试标注同一步的不同尝试。支持群/私筛选、加载更早回合、暂停更新和跟随最新过程。旧记录缺少逻辑关联时显示未知，不补采或推定；上游未提供公开摘要时仅显示进度，不显示隐藏思维链。

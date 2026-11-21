@@ -2,7 +2,7 @@
 全量测试 → （主人已批准且全绿）落回真实仓库并触发 rebuild。
 
 启动（幂等，重复启动会因单实例锁退出）：
-  wsl.exe --user root -e bash -c "nohup python3 /mnt/e/QQ-Bot/scripts/selfmod_worker.py >> /var/lib/docker/volumes/xiaomachi-data/_data/selfmod/worker.log 2>&1 &"
+  wsl.exe --user root -e bash -c "nohup python3 /mnt/e/QQ-Bot/scripts/selfmod_worker.py >> /var/lib/docker/volumes/xiaomachi-bot-data/_data/selfmod/worker.log 2>&1 &"
 
 rebuild-xiaomachi-wsl.bat 末尾会自动拉起本 worker。
 """
@@ -18,7 +18,10 @@ import time
 from pathlib import Path
 
 REPO = Path("/mnt/e/QQ-Bot")
-DATA = Path("/var/lib/docker/volumes/xiaomachi-data/_data")
+# 注意：compose 的项目名是 xiaomachi-bot，卷 xiaomachi_data 的真实目录是
+# /var/lib/docker/volumes/xiaomachi-bot-data。2026-11 前这里写的是
+# xiaomachi-data（不存在），worker 因此一直起不来、也看不到提案。
+DATA = Path("/var/lib/docker/volumes/xiaomachi-bot-data/_data")
 SELFMOD = DATA / "selfmod"
 PENDING = SELFMOD / "pending"
 RESULTS = SELFMOD / "results"

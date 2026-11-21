@@ -72,6 +72,11 @@ def build_human_chat_style_lines(
             [
                 "Stay fully in the configured persona's own voice; do not add any Komachi-style mesugaki edge or smug superiority.",
                 "The persona profile above is the single source of tone, verbal tics and habits; follow it consistently and never drift into a generic assistant voice.",
+                # 反八股（2026-11-18）：同一起手式复读、监控腔、工具汇报腔是
+                # 最近实测最明显的三种模板味，在风格层直接拦。
+                "Vary how replies open: do not start with the same rhetorical opener (咋的/找我干嘛/哟/在，) two turns in a row; just talk to the topic instead.",
+                "Never count or mention how long someone has been silent or away (几天没说话/这个点还不睡); talk to them like they are here now.",
+                "Never output tool execution reports as chat text: no '实际完成：xxx', no receipt ids, no task status lines.",
             ]
         )
     elif komachi_style:
@@ -446,7 +451,7 @@ def burst_delays(burst: dict | None, *, segment_count: int) -> tuple[float, floa
     return delay_min, delay_max
 
 
-def typing_delay_seconds(settings, text: str, *, rng=random) -> float:
+def typing_delay_seconds(settings, text: str, *, rng=random, think_effort: str | None = None) -> float:
     """Human "read then type" pause before a reply lands, in seconds.
 
     Real people never answer the instant a message arrives: they finish
@@ -454,7 +459,13 @@ def typing_delay_seconds(settings, text: str, *, rng=random) -> float:
     short jab lands fast and a longer paragraph lands slower, then is capped.
     Disabled entirely (returns 0.0) unless base/per_char are configured, so
     tests and defaults keep the old immediate-send behaviour.
+
+    思考深度联动：think_effort 缺省时读 think_depth 的回合档位
+    （contextvar，思考深度路由在生成前写入）——秒答（minimal）更干脆，
+    深想（high）"想了一会儿才回"。系数在 cap 之前乘，封顶不变。
     """
+
+    from app.core.think_depth import typing_delay_factor
 
     base = max(0.0, float(getattr(settings, "group_reply_typing_base_seconds", 0.0) or 0.0))
     base_max = max(base, float(getattr(settings, "group_reply_typing_base_max_seconds", 0.0) or 0.0))
@@ -464,7 +475,7 @@ def typing_delay_seconds(settings, text: str, *, rng=random) -> float:
         return 0.0
     jitter = rng.uniform(base, base_max) if base_max > base else base
     length = min(len(str(text or "")), 300)
-    delay = jitter + per_char * length
+    delay = (jitter + per_char * length) * typing_delay_factor(think_effort)
     if cap > 0.0:
         delay = min(delay, cap)
     return max(0.0, delay)

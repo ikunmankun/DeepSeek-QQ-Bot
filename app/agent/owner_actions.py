@@ -458,6 +458,20 @@ class OwnerNoticeWorker:
                     if not receipt: raise RuntimeError('missing_owner_image_receipt')
                     actual.append(receipt)
             else:
+                if receipts:
+                    # 工作汇报改投私聊（2026-11-10）：有工具回执=任务内容已发进群
+                    # （叫醒/日记等），"实际完成：…（回执…）"是给主人的账本不是群内容，
+                    # 群里已泄露过5次。纯查询结果（无回执）仍在原群交付。
+                    boundary.on_dispatch()
+                    actual=list(await self.sender.send_private_text(OutboundPrivateMessage(
+                        settings.owner_qq, f"[群{data['source_group_id']}任务汇报] {text}")))
+                    for image in images:
+                        guard.require_valid()
+                        receipt=await self.sender.send_private_image(user_id=settings.owner_qq,image_file=image)
+                        if not receipt: raise RuntimeError('missing_owner_image_receipt')
+                        actual.append(receipt)
+                    if not actual: raise RuntimeError('missing_owner_notice_receipt')
+                    return ToolOutcome({'message_ids':actual},'sent',actual[0])
                 from types import SimpleNamespace
                 from app.agent.social_executor import SocialExecutor
                 from app.agent.social_contracts import SocialJob,SocialObservation,SocialDecision

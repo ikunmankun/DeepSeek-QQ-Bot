@@ -122,6 +122,30 @@ class PersonaExampleVector(Base):
     )
 
 
+class CorpusStyleExample(Base):
+    """真人对话语料（PersonalDialog 蒸馏）的元数据行。
+
+    与 persona_style_examples（仿人格成员例句池）隔离：hit_id 对应 vec0
+    虚拟表 corpus_style_vec 的同名主键，向量本体存 vec0（紧凑二进制），
+    这张表只存检索回填用的文本与情境。kind：0=全量 casual 池，1=女性声子集。
+    """
+
+    __tablename__ = "corpus_style_examples"
+
+    hit_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    text: Mapped[str] = mapped_column(Text, default="")
+    context_before: Mapped[list] = mapped_column(JSON, default=list)
+    kind: Mapped[int] = mapped_column(Integer, default=0)
+    gender: Mapped[str] = mapped_column(String(8), default="")
+    prev_len: Mapped[int] = mapped_column(Integer, default=0)
+    provider: Mapped[str] = mapped_column(String(64), default="")
+    model: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utc_now,
+    )
+
+
 class MemberFactRefreshState(Base):
     """Independent watermark for member fact refresh.
 
@@ -859,3 +883,26 @@ class LifeNote(Base):
     embedding_dimensions: Mapped[int] = mapped_column(Integer, default=0)
     embedding_version: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+class VitalityState(Base):
+    """身体状态模拟：饥饿/口渴/精力三维数值（2026-11-19）。
+
+    hunger/thirst 是"难受度"（0 刚吃饱/喝够，100 难受顶格），energy 是
+    "电量"（0 困瘫，100 精力满）。数值只在读和动作时落库：读时按流逝
+    分钟推进衰减，中间时段纯计算，不跑定时刷新。群私两进程共享一行
+    （bot_qq 主键），谁读谁推进，动作（吃饭/喝水/歇）直接改值。
+    """
+
+    __tablename__ = "vitality_states"
+
+    bot_qq: Mapped[int] = mapped_column(Integer, primary_key=True)
+    hunger: Mapped[float] = mapped_column(Float, default=30.0)
+    thirst: Mapped[float] = mapped_column(Float, default=30.0)
+    energy: Mapped[float] = mapped_column(Float, default=75.0)
+    last_updated: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    last_meal_kind: Mapped[str] = mapped_column(String(16), default="")
+    last_meal_menu: Mapped[str] = mapped_column(String(120), default="")
+    last_meal_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_drink_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_rest_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+

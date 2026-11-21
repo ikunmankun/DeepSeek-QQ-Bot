@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
@@ -18,6 +20,47 @@ from app.agent.tool_agent import AgentTool, ToolOutcome
 from app.core.time_utils import shanghai_now_naive
 
 MAX_DIARY_CHARS = 2000
+REFLECTION_TAG = "睡前记"
+
+
+@dataclass(frozen=True)
+class DiaryEntry:
+    """一条日记条目（与 DiaryWriter.write 的 markdown 格式一一对应）。"""
+
+    time: str
+    mood: str
+    tag: str
+    text: str
+
+
+_HEADER_SPLIT = re.compile(r"^## ", re.MULTILINE)
+
+
+def parse_diary_file(path: Path) -> list[DiaryEntry]:
+    """解析一天的日记 markdown，按条目拆开；格式不符的部分整段跳过。"""
+
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    entries: list[DiaryEntry] = []
+    for chunk in _HEADER_SPLIT.split(content):
+        if not chunk.strip():
+            continue
+        lines = chunk.split("\n", 1)
+        header = lines[0].strip()
+        body = (lines[1] if len(lines) > 1 else "").strip()
+        parts = [p.strip() for p in header.split("·")]
+        if not parts or not re.fullmatch(r"\d{1,2}:\d{2}", parts[0]):
+            continue  # 不是 DiaryWriter 写的条目，忽略
+        mood, tag = "", ""
+        for part in parts[1:]:
+            if part.startswith("心情："):
+                mood = part[len("心情："):].strip()
+            elif part:
+                tag = part
+        entries.append(DiaryEntry(time=parts[0], mood=mood, tag=tag, text=body))
+    return entries
 
 
 class DiaryWriter:
@@ -25,6 +68,12 @@ class DiaryWriter:
 
     def __init__(self, data_dir: Path) -> None:
         self.directory = Path(data_dir) / "diary"
+
+    def read_day(self, day: datetime) -> list[DiaryEntry]:
+        path = self.directory / f"{day:%Y-%m-%d}.md"
+        if not path.exists():
+            return []
+        return parse_diary_file(path)
 
     def already_reflected_today(self) -> bool:
         """今天的日记里是否已有睡前反思（重启后不重写）。"""
@@ -36,7 +85,7 @@ class DiaryWriter:
         path = self.directory / f"{day:%Y-%m-%d}.md"
         if not path.exists():
             return False
-        return "睡前记" in path.read_text(encoding="utf-8")
+        return any(e.tag == REFLECTION_TAG for e in parse_diary_file(path))
 
     def read_recent(self, *, max_chars: int = 1500, max_days: int = 7) -> str:
         """从今天往回读最近几天的日记，拼到 max_chars 为止；没有日记返回空串。"""
@@ -116,12 +165,13 @@ def build_diary_tool(*, guard, writer: DiaryWriter,
 
 # ---------------------------------------------------------------- 每日反思
 
-MAX_MATERIAL_CHARS = 1200
+MAX_MATERIAL_CHARS = 2000
 
-_WEEKDAY_NAMES = {0: "周一", 1: "周二", 2: "周三", 3: "周四", 4: "周五", 5: "周六", 6: "周日"}
+WEEKDAY_NAMES = {0: "周一", 1: "周二", 2: "周三", 3: "周四", 4: "周五", 5: "周六", 6: "周日"}
 
 
-def collect_daily_material(engine, *, group_ids, bot_qq: int, now: datetime) -> str:
+def collect_daily_material(engine, *, group_ids, bot_qq: int, now: datetime,
+                           writer: DiaryWriter | None = None) -> str:
     """把当天的素材摆在一起，供睡前反思。每块独立容错，缺啥跳啥。"""
 
     from sqlalchemy import func, select
@@ -195,17 +245,32 @@ def collect_daily_material(engine, *, group_ids, bot_qq: int, now: datetime) -> 
     except Exception:
         pass
 
+    # 5) 今天随手记的日记条目（逛B站的见闻在这里面），睡前翻一遍再落笔
+    try:
+        day_notes = []
+        for entry in (writer.read_day(now) if writer is not None else []):
+            if entry.tag == REFLECTION_TAG or not entry.text:
+                continue
+            label = entry.tag or entry.mood or "随手记"
+            day_notes.append(f"[{entry.time}·{label}] {entry.text[:160]}")
+        if day_notes:
+            blocks.append("今天你白天随手记的：\n" + "\n".join(day_notes[:6]))
+    except Exception:
+        pass
+
     return "\n".join(blocks)[:MAX_MATERIAL_CHARS]
 
 
 def build_reflection_prompt(*, persona_text: str, material: str, now: datetime) -> list[str]:
-    weekday = _WEEKDAY_NAMES.get(now.weekday(), "")
+    weekday = WEEKDAY_NAMES.get(now.weekday(), "")
     lines = ["System persona: " + persona_text.strip(),
         f"Group policy: 现在是{now:%m月%d日}（{weekday}）深夜，睡前写今天的日记。"
-        "日记是私密的，没人会看到，写你真正想记的——对某个人今天的看法、一件小事、"
-        "一句没说出口的话，或者今天就是平平无奇的一天也照实写。"
-        "不是汇报也不是总结陈词，别复述素材本身；一两句到两百字都行。"
-        "子句之间用逗号或连写，不用空格；不写颜文字和emoji。"]
+        "日记是私密的，没人会看到，写你真正想记的。今晚写一篇小作文式的当日总结："
+        "至少一百字，一百到三百字正好，像真的过完了一天在回味——"
+        "今天群里发生了什么、和谁聊了什么、逛B站刷到什么、心情怎么变的，"
+        "都值得写进去；今天平平无奇也照实写，把平淡写出味道来。"
+        "不是汇报也不是总结陈词，别复述素材本身，用你自己的语气把这一天串起来。"
+        "子句之间用逗号或连写，不用空格；不写颜文字和emoji，不列点不分段。"]
     if material.strip():
         lines.append("今天的素材（只是参考，不是必答题）：\n" + material.strip())
     lines.append("直接输出日记正文：不要日期抬头，不要解释，不要汇报腔。")
@@ -244,7 +309,8 @@ class DiaryReflectionService:
         if self.writer.already_reflected_today():
             return None  # 重启后不重写当天的睡前反思
         material = collect_daily_material(self.engine, group_ids=self.group_ids,
-                                          bot_qq=self.bot_qq, now=now)
+                                          bot_qq=self.bot_qq, now=now,
+                                          writer=self.writer)
         prompt = build_reflection_prompt(persona_text=self.persona_text,
                                          material=material, now=now)
         reply = self.llm_client.generate_text(
@@ -252,7 +318,7 @@ class DiaryReflectionService:
         text = str(reply or "").strip()
         if not text:
             return None
-        path = self.writer.write(text=text[:400], now=now, mood=None, tag="睡前记")
+        path = self.writer.write(text=text[:800], now=now, mood=None, tag=REFLECTION_TAG)
         if self._reflect_hook is not None:
             try:
                 self._reflect_hook(now)

@@ -221,6 +221,7 @@ class InboundRouter(GroupPersonaContextMixin, GroupPolicyMixin, GroupIngestMixin
     private_chat_service: object | None = None
     group_image_service: object | None = None
     music_identification_service: object | None = None
+    fuzzy_recall_service: object | None = None
     memory_compaction_service: object | None = None
     memory_orchestrator: MemoryOrchestrator | None = None
     persona_manager: PersonaManager | None = None
@@ -359,10 +360,25 @@ class InboundRouter(GroupPersonaContextMixin, GroupPolicyMixin, GroupIngestMixin
         raise RuntimeError("V2 memory provider is not configured")
 
     async def handle_group_message(self, event) -> None:
+        await self.refresh_inbound_image_urls(event)
         persisted = self.ingest_live_group_message(event)
         if not persisted:
             return
         await self._handle_persisted_group_message(event)
+
+    async def refresh_inbound_image_urls(self, event) -> None:
+        """图片链接保活：入库缓存前经 napcat get_image 换新鲜 rkey 链接。
+
+        失败自吞——换不到链接时行为与从前一致（死链接下载失败，视觉与表情
+        收集拿不到本地文件而已），绝不能阻塞消息入库。
+        """
+        from app.core.image_cache import refresh_image_urls
+
+        try:
+            await refresh_image_urls(getattr(event, "raw_payload", {}),
+                                     self.sender.call_api)
+        except Exception:
+            logger.exception("image_url_refresh_failed")
 
     async def try_handle_context_reset(self, event, *, cancel_group=None) -> bool:
         from app.core.context_reset import GROUP_RESET_COUNT, authored_reset, reset_confirmation
@@ -673,6 +689,7 @@ class InboundRouter(GroupPersonaContextMixin, GroupPolicyMixin, GroupIngestMixin
         private surface is chat-only (see research/39-private-chat-only-scope).
         """
 
+        await self.refresh_inbound_image_urls(event)
         persisted = self._persist_private_inbound_message(event)
         if not persisted:
             return

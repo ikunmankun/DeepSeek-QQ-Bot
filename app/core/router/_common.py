@@ -304,3 +304,6 @@ class PreparedGroupReply:
     memory_tool_executor: object | None = None
     memory_source_ids: tuple[str, ...] = ()
     memory_has_evidence: bool = False
+    # 思考深度路由：本回合按消息复杂度动态选的 reasoning effort。
+    # None=沿用 client 固化档位；minimal/medium/high=覆盖档位。
+    think_effort: str | None = None

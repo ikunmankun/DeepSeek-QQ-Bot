@@ -189,6 +189,90 @@ def identify_by_fingerprint_xfyun(audio: Path, *, app_id: str, api_key: str,
     )
 
 
+def identify_by_humming_xfyun(audio: Path, *, app_id: str, api_key: str,
+                               api_secret: str, api_url: str = XFYUN_MUSIC_URL,
+                               timeout: float = 40.0) -> MusicMatch | None:
+    """讯飞歌曲识别·哼唱模式（mode=afs）：用户哼的旋律 → 歌名。
+
+    与 ACR 版（mode=music）同一端点，但喂的是人哼的旋律而非原声。
+    服务需在讯飞控制台开通"歌曲识别"；live 验证前 payload 以官方错误信息为准。
+    无匹配返回 None；鉴权/接口错误抛 OSError。
+    """
+    date = formatdate(usegmt=True)
+    headers = {
+        "Authorization": xfyun_authorization(api_key, api_secret, api_url, date),
+        "Date": date,
+        "Host": urlsplit(api_url).netloc,
+        "Content-Type": "application/json",
+    }
+    request = {
+        "header": {"app_id": app_id, "status": 3},
+        "parameter": {"acr_music": {"mode": "afs",
+                                    "output_text": {"encoding": "utf8", "compress": "raw",
+                                                    "format": "json"}}},
+        "payload": {"data": {"encoding": "lame", "sample_rate": 16000, "channels": 1,
+                             "bit_depth": 16, "status": 3,
+                             "audio": base64.b64encode(audio.read_bytes()).decode("ascii"),
+                             "frame_size": 0}},
+    }
+    response = httpx.post(api_url, headers=headers, json=request, timeout=timeout,
+                          trust_env=False)
+    response.raise_for_status()
+    payload = response.json()
+    header = payload.get("header") or {}
+    if int(header.get("code", -1)) != 0:
+        raise OSError(f"xfyun_hum_error:{header.get('message')}"[:200])
+    text = str(((payload.get("payload") or {}).get("output_text") or {}).get("text") or "")
+    if not text:
+        return None
+    decoded = json.loads(base64.b64decode(text).decode("utf-8"))
+    items = (decoded.get("metadata") or {}).get("music") or []
+    if not items:
+        return None
+    items = sorted(items, key=lambda item: float(item.get("score") or 0), reverse=True)
+    top = items[0]
+    artists = "、".join(str(a.get("name") or "").strip()
+                        for a in (top.get("artists") or []) if a.get("name"))
+    return MusicMatch(
+        title=str(top.get("title") or "").strip(),
+        artist=artists,
+        album=str((top.get("album") or {}).get("name") or "").strip(),
+        source="humming",
+    )
+
+
+def identify_music_from_voice(audio: Path, *, audd_api_token: str,
+                              xfyun_creds: tuple[str, str, str] | None = None,
+                              web_search_client=None, llm=None,
+                              subtitle_text: str = "") -> MusicMatch | None:
+    """语音消息里的音乐识别链：原声指纹 → 哼唱识别 → 字幕歌词兜底。
+
+    场景：群友发语音哼歌/唱歌/录了段放着的 BGM。三种情况都可能：
+    1. 录到了原声（手机外放）→ audD 指纹直接命中；
+    2. 是人哼的旋律 → audD 认不出，走讯飞哼唱识别（afs）；
+    3. 是清唱带歌词/其实是说话 → 转写交给调用方判断。
+    全部失败返回 None。
+    """
+    # 1) 原声指纹（外放 BGM 场景）
+    try:
+        match = identify_by_fingerprint(audio, api_token=audd_api_token)
+        if match:
+            return match
+    except (OSError, ValueError):
+        pass
+    # 2) 哼唱识别（讯飞 afs）
+    if xfyun_creds and all(xfyun_creds):
+        try:
+            match = identify_by_humming_xfyun(
+                audio, app_id=xfyun_creds[0], api_key=xfyun_creds[1], api_secret=xfyun_creds[2])
+            if match:
+                return match
+        except (OSError, ValueError):
+            pass
+    # 3) 字幕歌词兜底（原实现仅适用于有字幕的场景，这里没有字幕源，跳过）
+    return None
+
+
 _LYRIC_PROMPT = (
     "下面是一段视频的字幕文本。只挑出【像歌词】的句子（人物说话的口播不算），"
     "每行一句原样摘出，最多5行，不要翻译不要解释。一句都不像就只输出：无"

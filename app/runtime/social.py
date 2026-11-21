@@ -7,7 +7,12 @@ from app.agent.social_planner import SocialPlanner
 from app.agent.social_policy import configured_agent_jobs, configured_scheduled_jobs
 from app.agent.social_runtime import SocialRuntime
 from app.providers.llm_client import LlmClient
-from app.runtime.providers import build_proactive_judge_client
+from app.runtime.providers import (
+    build_chart_vision_settings,
+    build_proactive_judge_client,
+    build_reverse_image_searcher,
+    build_voice_asr_settings,
+)
 from app.adapters.account_profile import AccountProfileAdapter
 from app.agent.autonomous_social import AutonomousSocialExecutor, AutonomousSocialPlanner
 from app.agent.mcp_tools import McpToolProvider
@@ -91,6 +96,9 @@ def build_social_agent(*, router, sender, gateway, llm_client):
         executor = AutonomousSocialExecutor(router=router, sender=sender, qzone_adapter=qzone,
             decision_client=llm_client, image_service=getattr(router, "group_image_service", None),
             music_service=getattr(router, "music_identification_service", None),
+            reverse_image_searcher=build_reverse_image_searcher(settings=settings),
+            voice_asr=build_voice_asr_settings(settings=settings),
+            chart_vision=build_chart_vision_settings(settings=settings),
             profile_adapter=AccountProfileAdapter(gateway, account_id=settings.bot_qq,
                 allowed_group_ids=tuple(job.scope_id for job in jobs if job.kind == "group"),
                 media_roots=((settings.data_dir / "autonomous_artifacts").resolve(),))) if autonomous else SocialExecutor(router=router, sender=sender, qzone_adapter=qzone)

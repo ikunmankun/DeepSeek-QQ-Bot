@@ -14,7 +14,7 @@ if "%STATUS_EXIT_CODE%"=="75" goto :recovering
 if not "%STATUS_EXIT_CODE%"=="0" goto :failed
 echo Rebuild complete. The new code, configs and persona are live.
 rem 自改 V1：顺手拉起（幂等，单实例锁兜底）WSL 侧 selfmod worker，测试/发布提案
-wsl.exe --user root --exec bash -c "nohup python3 /mnt/e/QQ-Bot/scripts/selfmod_worker.py >> /var/lib/docker/volumes/xiaomachi-data/_data/selfmod/worker.log 2>&1 &"
+wsl.exe --user root --exec bash -c "mkdir -p /var/lib/docker/volumes/xiaomachi-bot-data/_data/selfmod && nohup python3 /mnt/e/QQ-Bot/scripts/selfmod_worker.py >> /var/lib/docker/volumes/xiaomachi-bot-data/_data/selfmod/worker.log 2>&1 &"
 ping -n 3 127.0.0.1 >nul
 exit /b 0
 

@@ -58,4 +58,8 @@ class BilibiliBrowserFeature(FeatureModule):
                  if now_mono - stamp < FINDINGS_TTL_SECONDS]
         if not fresh:
             return ()
-        return ["你今天刷B站看到这些（想聊就自然聊，或当没看见）：\n" + "\n".join(fresh)]
+        # 2026-11-18：观察轮从"被动可选"改成"鼓励主动挑话头"——这是机器人
+        # 自己刷到的内容，主动分享比接话更像真人；仍然保留不聊的自由。
+        return ["这是你自己刷B站看到的内容。群聊冷场、没人接话，或者你本来就想说点什么时，"
+                "主动把它抛出来当话题：贴链接、说一句你自己的看法都行；有人正聊得热闹就别打断，"
+                "不想聊也可以当没看见：\n" + "\n".join(fresh)]

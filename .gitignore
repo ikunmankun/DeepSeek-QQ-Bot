@@ -106,3 +106,22 @@ infra/wsl/.env.bak*
 
 # 表情库是卷挂载的运行资产（~94MB 网络图源），不进代码仓
 memes/
+pet/shell/node_modules/
+pet/*.log
+pet/tripo_convert_*.glb
+pet/anim/webm/
+
+# 公开发布补遗（2026-11-22 审计）
+# 第三方语料数据集（1.8GB，腾讯 PersonalDialog），不进代码仓
+datasets/
+# JetBrains IDE 配置
+.idea/
+# 桌面宠物：第三方 Electron 发行包/安装包/授权 token/3D 模型二进制，只提交源码
+pet/dsh-pet/
+pet/dsh-pet.zip
+pet/dsh-pet-token.txt
+pet/*.glb
+# 配置备份（含密钥特征，仅本地）
+app_bak_config.py
+# 根目录宠物日志（pet/*.log 只盖 pet/ 内的）
+pet.log

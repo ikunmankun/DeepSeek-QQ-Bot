@@ -34,6 +34,25 @@ class AppSettings(BaseSettings):
     bili_browser_interests: str = Field(default="动画,游戏,科技,教程", alias="BILI_BROWSER_INTERESTS")
     bili_browser_max_stay_seconds: int = Field(default=480, alias="BILI_BROWSER_MAX_STAY_SECONDS")
     bili_chrome_path: str = Field(default="/opt/xhs/chrome/chrome", alias="BILI_CHROME_PATH")
+    # 主动私聊搭话（owner_chitchat worker）：早安窗口 + 闲聊窗口（HH:MM-HH:MM，
+    # 逗号分隔，窗口内带抖动）；主人正在私聊时不插话；安静时段 23:00-08:00 顺延。
+    owner_chitchat_enabled: bool = Field(default=True, alias="OWNER_CHITCHAT_ENABLED")
+    owner_chitchat_morning_window: str = Field(default="08:10-08:50", alias="OWNER_CHITCHAT_MORNING_WINDOW")
+    owner_chitchat_windows: str = Field(
+        default="12:40-14:30,15:40-17:20,19:00-20:40,20:40-22:30",
+        alias="OWNER_CHITCHAT_WINDOWS")
+    owner_chitchat_max_daily: int = Field(default=4, alias="OWNER_CHITCHAT_MAX_DAILY")
+    owner_chitchat_min_gap_minutes: float = Field(default=150, alias="OWNER_CHITCHAT_MIN_GAP_MINUTES")
+    owner_chitchat_idle_minutes: float = Field(default=45, alias="OWNER_CHITCHAT_IDLE_MINUTES")
+    # 天气（Open-Meteo 免费接口）：WEATHER_CITY 按城市名 geocoding（支持"广州天河区"
+    # 这种写法，查不到会逐级去后缀重试）；WEATHER_LAT/WEATHER_LON 直接给坐标可跳过。
+    weather_city: str = Field(default="", alias="WEATHER_CITY")
+    weather_lat: float = Field(default=0.0, alias="WEATHER_LAT")
+    weather_lon: float = Field(default=0.0, alias="WEATHER_LON")
+    # 身体状态模拟（vitality 插件）：饥饿/口渴/精力三维数值，三餐 worker 在群
+    # 进程跑并写日记；夜宵是概率事件（饿度达标才吃）。关掉只停排程与提示注入。
+    vitality_enabled: bool = Field(default=True, alias="VITALITY_ENABLED")
+    vitality_supper_probability: float = Field(default=0.35, alias="VITALITY_SUPPER_PROBABILITY")
     # 语音（TTS）：TTS_API_KEY 为空时功能整体隐藏。provider 支持 mimo/fishaudio/minimax。
     tts_api_key: str = Field(default="", alias="TTS_API_KEY")
     tts_provider: str = Field(default="mimo", alias="TTS_PROVIDER")
@@ -55,6 +74,49 @@ class AppSettings(BaseSettings):
     music_id_api_url: str = Field(default="", alias="MUSIC_ID_API_URL")
     music_id_queue_capacity: int = Field(default=4, alias="MUSIC_ID_QUEUE_CAPACITY")
     music_id_timeout_seconds: float = Field(default=240, alias="MUSIC_ID_TIMEOUT_SECONDS")
+    # 以图搜图：REVERSE_IMAGE_PROVIDERS 逗号分隔（ascii2d/trace_moe/saucenao，顺序即优先级，
+    # 空/auto 用默认链）；off 时整体隐藏。saucenao 需要 REVERSE_IMAGE_SAUCENAO_TOKEN
+    # （saucenao.com 免费注册），无凭证自动从链里剔除。
+    reverse_image_providers: str = Field(default="ascii2d,trace_moe", alias="REVERSE_IMAGE_PROVIDERS")
+    reverse_image_saucenao_token: str = Field(default="", alias="REVERSE_IMAGE_SAUCENAO_TOKEN")
+    reverse_image_timeout_seconds: float = Field(default=15.0, alias="REVERSE_IMAGE_TIMEOUT_SECONDS")
+    # VPN 代理分流：被墙站点才走（VPN_PROXY_HOSTS 域名后缀清单，含子域），其余直连。
+    # 端点支持 http:// 与 socks5://（socks 需镜像装 socksio）；留空 = 全部直连。
+    vpn_proxy_url: str = Field(default="", alias="VPN_PROXY_URL")
+    vpn_proxy_hosts: str = Field(
+        default="saucenao.com,pixiv.net,pximg.net,trace.moe,youtube.com,youtu.be,googlevideo.com,"
+                "x.com,twitter.com,twimg.com,danbooru.donmai.us,gelbooru.com",
+        alias="VPN_PROXY_HOSTS")
+    # 记忆星图：定期把活跃记忆的衰减状态导出到 data/agent_monitor/memory_map.json，
+    # 供只读监控页 /memory 画图。只读导出，不影响记忆链路。
+    memory_map_enabled: bool = Field(default=True, alias="MEMORY_MAP_ENABLED")
+    memory_map_interval_seconds: int = Field(default=300, ge=30, le=86400,
+                                             alias="MEMORY_MAP_INTERVAL_SECONDS")
+    # 日记本：定期把 data/diary 的近期日记导出到 data/agent_monitor/diary_map.json，
+    # 供只读监控页 /diary 翻看。只读导出，不影响日记或聊天链路。
+    diary_map_enabled: bool = Field(default=True, alias="DIARY_MAP_ENABLED")
+    diary_map_interval_seconds: int = Field(default=300, ge=30, le=86400,
+                                            alias="DIARY_MAP_INTERVAL_SECONDS")
+    # 语音转文字（ASR）：QQ 语音消息 → 文本，讯飞语音听写，accent 支持方言
+    # （cantonese/henanese 等，见讯飞方言清单；mandarin=普通话）。
+    # 三件套凭证缺失时整体隐藏；讯飞 app 需在控制台启用"语音听写"服务。
+    voice_asr_provider: str = Field(default="xfyun", alias="VOICE_ASR_PROVIDER")
+    voice_asr_app_id: str = Field(default="", alias="VOICE_ASR_APP_ID")
+    voice_asr_api_key: str = Field(default="", alias="VOICE_ASR_API_KEY")
+    voice_asr_api_secret: str = Field(default="", alias="VOICE_ASR_API_SECRET")
+    voice_asr_accent: str = Field(default="mandarin", alias="VOICE_ASR_ACCENT")
+    voice_asr_language: str = Field(default="zh_cn", alias="VOICE_ASR_LANGUAGE")
+    voice_asr_timeout_seconds: float = Field(default=30.0, alias="VOICE_ASR_TIMEOUT_SECONDS")
+    # 图表精读：把图表截图交给独立视觉模型（OpenAI 兼容 chat completions，收图）
+    # 做结构化解读。主 LLM 是 DeepSeek 官方 API（纯文本收不了图），必须另配视觉
+    # 通道：硅基流动/阿里百炼/智谱等都兼容。三件缺失时工具隐藏。
+    chart_vision_base_url: str = Field(default="", alias="CHART_VISION_BASE_URL")
+    chart_vision_api_key: str = Field(default="", alias="CHART_VISION_API_KEY")
+    chart_vision_model: str = Field(default="", alias="CHART_VISION_MODEL")
+    chart_vision_timeout_seconds: float = Field(default=60.0, alias="CHART_VISION_TIMEOUT_SECONDS")
+    # 长文档要点提取：主模型分块 map-reduce 提要点（纯文本，无需视觉通道）。
+    # 关闭后群/私聊的 summarize_document 工具自动隐藏。
+    document_digest_enabled: bool = Field(default=True, alias="DOCUMENT_DIGEST_ENABLED")
     agent_runtime: Literal["harness", "legacy"] = Field(default="harness", alias="AGENT_RUNTIME")
     agent_responses_continuation: Literal["off", "auto", "on"] = Field(default="auto", alias="AGENT_RESPONSES_CONTINUATION")
     agent_max_external_writes: int = Field(default=2, ge=1, le=8, alias="AGENT_MAX_EXTERNAL_WRITES")
@@ -98,6 +160,32 @@ class AppSettings(BaseSettings):
     llm_reasoning_effort: ReasoningEffort = Field(
         default="medium",
         alias="LLM_REASONING_EFFORT",
+    )
+    # 思考深度路由：按消息复杂度动态覆盖本回合 reasoning effort
+    # （简单消息秒答、难题深思，模拟人脑）；精力联动=困了懒得深想
+    # （被点名/主人直接求助豁免）。详见 app/core/think_depth.py。
+    think_depth_enabled: bool = Field(default=True, alias="THINK_DEPTH_ENABLED")
+    think_depth_energy_coupled: bool = Field(
+        default=True,
+        alias="THINK_DEPTH_ENERGY_COUPLED",
+    )
+    # 语料向量库（PersonalDialog 蒸馏）：回复时按当前消息检索"相似情境下
+    # 真人的接法"注入风格参考。向量库未建/嵌入通道不可用时自动零注入。
+    corpus_style_retrieval_enabled: bool = Field(
+        default=True,
+        alias="CORPUS_STYLE_RETRIEVAL_ENABLED",
+    )
+    corpus_style_max_examples: int = Field(
+        default=2,
+        ge=1,
+        le=3,
+        alias="CORPUS_STYLE_MAX_EXAMPLES",
+    )
+    corpus_style_min_cosine: float = Field(
+        default=0.60,
+        ge=0.0,
+        le=1.0,
+        alias="CORPUS_STYLE_MIN_COSINE",
     )
     llm_timeout_seconds: float = Field(
         default=120.0,

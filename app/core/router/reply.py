@@ -119,6 +119,7 @@ from app.core.memory_query_resolver import (
 from app.core.persona_engine import render_persona, render_safety_lines
 from app.core.affinity import affinity_judge_hint
 from app.core.group_mood import mood_judge_hint
+from app.core.think_depth import judge_think_depth
 from app.core.quoted_message import (
     flatten_raw_message_text,
     quoted_message_line_for_prompt,
@@ -958,6 +959,45 @@ class GroupReplyMixin:
                 if selected_image_turn is not None and selected_image_turn.images
                 else []
             )
+            # 思考深度路由：按消息复杂度定 reasoning effort（规则式，零成本）。
+            # 简单消息秒答（minimal），难题深思（high）；普通闲聊 None 不覆盖。
+            # 求助/点名（addressed_turn）在精力联动里豁免降档——叫了就得认真答。
+            think_decision = None
+            if self.runtime.settings.think_depth_enabled:
+                think_decision = judge_think_depth(
+                    event.plain_text,
+                    has_quote=event.reply_to_msg_id is not None,
+                    has_image=bool(target_images) or bool(event.images),
+                    explicit_request=addressed_turn,
+                    energy=self._think_depth_energy(),
+                    energy_coupled=self.runtime.settings.think_depth_energy_coupled,
+                )
+                logger.info(
+                    "think_depth group_id=%s msg_id=%s effort=%s level=%s reason=%s",
+                    event.group_id,
+                    event.platform_msg_id,
+                    think_decision.effort,
+                    think_decision.level,
+                    think_decision.reason,
+                )
+            # 语料向量库：相似情境下真人的接法（fail-soft，未建库/禁用时零注入）。
+            if self.runtime.settings.corpus_style_retrieval_enabled:
+                try:
+                    from app.core.style_corpus import render_corpus_block, retrieve_similar
+
+                    corpus_hits = retrieve_similar(
+                        self.engine,
+                        self.runtime.settings,
+                        event.plain_text,
+                        kind=0,
+                        limit=int(self.runtime.settings.corpus_style_max_examples),
+                        min_cosine=float(self.runtime.settings.corpus_style_min_cosine),
+                    )
+                    corpus_block = render_corpus_block(corpus_hits)
+                    if corpus_block:
+                        group_policy_lines = [*group_policy_lines, corpus_block]
+                except Exception:
+                    logger.debug("style_corpus_legacy_failed", exc_info=True)
             if target_images:
                 group_policy_lines = [
                     *group_policy_lines,
@@ -1350,6 +1390,7 @@ class GroupReplyMixin:
                         )
                     )
                 ),
+                think_effort=think_decision.effort if think_decision is not None else None,
             )
 
     @staticmethod
@@ -1457,6 +1498,22 @@ class GroupReplyMixin:
                 type(exc).__name__,
             )
 
+    def _think_depth_energy(self) -> float | None:
+        """思考深度路由用的当前精力（vitality 快照；读取失败返回 None 不联动）。"""
+
+        try:
+            from app.core.vitality import snapshot as vitality_snapshot
+
+            return float(
+                vitality_snapshot(
+                    self.engine,
+                    bot_qq=int(self.runtime.settings.bot_qq),
+                    now=datetime.now(),
+                ).energy
+            )
+        except Exception:
+            return None
+
     def _generate_group_reply_text(self, *, event, prepared_reply: PreparedGroupReply) -> str:
         conversation_key = f"group:{event.group_id}"
         envelope_enabled = (
@@ -1480,6 +1537,8 @@ class GroupReplyMixin:
             generation_kwargs["allow_web_search"] = prepared_reply.allow_web_search
         if force_web_search:
             generation_kwargs["force_web_search"] = True
+        if prepared_reply.think_effort:
+            generation_kwargs["reasoning_effort"] = prepared_reply.think_effort
         if (
             prepared_reply.use_memory_tools
             and prepared_reply.memory_tool_executor is not None

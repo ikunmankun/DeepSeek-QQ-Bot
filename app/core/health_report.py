@@ -118,13 +118,31 @@ class HealthReportService:
                 )
             ).scalar()
             delivery_bad = int(bad_rows or 0)
-        learned = meme_meanings = 0
+        # 表情库与梗含义都报真实口径：图片张数 + 有标签张数；含义只算
+        # meaning 非空的（占位文件不算"已补"——2026-11-20 修正，此前
+        # 474 个空占位把数字顶满，看着永远不变）。
+        learned_images = learned_tagged = meanings_total = meanings_real = 0
         stickers_dir = self.settings.data_dir / "sticker_library" / "learned"
         meanings_dir = self.settings.data_dir / "meme_meanings"
+        image_suffixes = {".webp", ".png", ".jpg", ".jpeg", ".gif"}
         if stickers_dir.exists():
-            learned = sum(1 for p in stickers_dir.glob("*.json"))
+            import json as _json
+            for path in stickers_dir.glob("*"):
+                if path.suffix.lower() in image_suffixes:
+                    learned_images += 1
+                    continue
+                if path.suffix.lower() == ".json":
+                    learned_tagged += 1
         if meanings_dir.exists():
-            meme_meanings = sum(1 for p in meanings_dir.glob("*.json"))
+            import json as _json
+            for path in meanings_dir.glob("*.json"):
+                meanings_total += 1
+                try:
+                    data = _json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if str(data.get("meaning") or "").strip():
+                    meanings_real += 1
         provider = str(getattr(self.settings, "music_id_provider", "audd") or "audd")
         music_on = bool(str(getattr(self.settings, "music_id_api_token", "") or "").strip()) \
             if provider != "xfyun" else all(
@@ -134,7 +152,8 @@ class HealthReportService:
             "【每日自检】" + now.strftime("%m-%d"),
             f"今天：群友 {user_msgs} 条，我发了 {bot_sent} 条（投递失败/不确定 {delivery_bad}）",
             f"网络：{_proxy_probe()}，{_direct_probe()}",
-            f"表情库：学过 {learned} 张，梗含义已补 {meme_meanings} 张",
+            f"表情库：学过 {learned_images} 张（已打标 {learned_tagged}）",
+            f"梗含义：真的补上 {meanings_real}/{meanings_total} 张",
             f"识曲：{provider} {'在线' if music_on else '未配置'}",
             "自改提案：见 data/selfmod/（有 ready 未应用的我会主动提）",
         ]

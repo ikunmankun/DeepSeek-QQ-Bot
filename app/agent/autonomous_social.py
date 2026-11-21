@@ -148,11 +148,18 @@ class AutonomousSocialPlanner(SocialPlanner):
 
 class AutonomousSocialExecutor:
     def __init__(self, *, router, sender, qzone_adapter, decision_client, image_service=None,
-                 music_service=None, reverse_image_searcher=None, profile_adapter=None, clock=None, sandbox=None):
+                 music_service=None, reverse_image_searcher=None, voice_asr=None,
+                 chart_vision=None, profile_adapter=None, clock=None, sandbox=None):
         self.router, self.sender, self.qzone = router, sender, qzone_adapter
         self.decision_client, self.image_service = decision_client, image_service
+        # 思考深度路由：按 effort 缓存的决策 client 变体（harness 每回合选档）。
+        from app.runtime.providers import DecisionClientVariants
+        self.decision_variants = DecisionClientVariants(
+            settings=router.runtime.settings, primary=decision_client)
         self.music_service = music_service
         self.reverse_image_searcher = reverse_image_searcher
+        self.voice_asr = voice_asr
+        self.chart_vision = chart_vision
         self.profile, self.sandbox = profile_adapter, sandbox
         self.compute_permission = deepcopy(router.runtime.social_policy.get("compute", {}))
         self.clock = clock or (lambda: datetime.now(UTC))
@@ -313,11 +320,21 @@ class AutonomousSocialExecutor:
             ingress_evidence = {'batch_size': len(batch.events), 'source_ids': [row.id for row in rows][:20],
                 'decision_reason': decision.reason[:160], 'target_message_id': event.platform_msg_id}
             reply_source_id = next(row.id for row in rows if row.platform_msg_id == event.platform_msg_id)
-        delivery_executor = SocialExecutor(router=self.router, sender=self.sender, qzone_adapter=self.qzone, clock=self.clock)
-        prior_delivery = delivery_executor.reply_delivery_state(batch.group_id, reply_source_id)
-        if self.runtime_mode == 'harness' and prior_delivery:
-            return AgentActionResult('uncertain' if prior_delivery == 'uncertain' else 'silent',
-                note='prior_reply_delivery_' + prior_delivery)
+            delivery_executor = SocialExecutor(router=self.router, sender=self.sender, qzone_adapter=self.qzone, clock=self.clock)
+            prior_delivery = delivery_executor.reply_delivery_state(batch.group_id, reply_source_id)
+            if self.runtime_mode == 'harness' and prior_delivery:
+                return AgentActionResult('uncertain' if prior_delivery == 'uncertain' else 'silent',
+                    note='prior_reply_delivery_' + prior_delivery)
+            # 过期回合守卫（2026-11-14）：重启恢复会把十几小时前投递不确定的旧回合
+            # 重新执行——新会话没有当时的上下文，答出来就是答非所问。旧消息超时
+            # 一律静默跳过，宁可不说也不拿错位的上下文硬接。
+            stale_age = max(
+                (shanghai_aware(self.clock()) - shanghai_aware(row.timestamp)
+                 for row in rows if row.timestamp is not None),
+                default=timedelta(0))
+            if stale_age > timedelta(minutes=10):
+                return AgentActionResult("silent",
+                    note=f"stale_turn_skipped age_minutes={int(stale_age.total_seconds() // 60)}")
         class InteractiveGuard:
             parent = guard
             action_id = "interactive-" + str(guard.turn_id)
@@ -418,6 +435,51 @@ class AutonomousSocialExecutor:
                     + timedelta(days=1, seconds=60)) if terminal == "model_daily_budget" else now + timedelta(seconds=60)
                 self.repository.schedule_intention(scope, next_due=due, status="waiting", before_commit=guard.require_valid)
         return SocialResult(result.status, result.receipt_id, result.reason)
+
+    def _think_depth_energy(self) -> float | None:
+        """思考深度路由用的当前精力（vitality 快照；读取失败返回 None 不联动）。"""
+
+        try:
+            from app.core.vitality import snapshot as vitality_snapshot
+            return float(vitality_snapshot(self.router.engine,
+                bot_qq=int(self.router.runtime.settings.bot_qq), now=datetime.now()).energy)
+        except Exception:
+            return None
+
+    def _turn_think_effort(self, *, text: str, has_quote: bool = False, has_image: bool = False,
+                           explicit_request: bool = False) -> str | None:
+        """本回合思考深度判定；结果写进回合 contextvar（打字延迟联动读）。
+
+        返回 None=沿用 client 固化档位；minimal/medium/high=按档位换变体 client。
+        """
+
+        settings = self.router.runtime.settings
+        from app.core.think_depth import judge_think_depth, set_turn_effort
+        if not getattr(settings, "think_depth_enabled", True):
+            set_turn_effort("")
+            return None
+        decision = judge_think_depth(
+            text,
+            has_quote=has_quote,
+            has_image=has_image,
+            explicit_request=explicit_request,
+            energy=self._think_depth_energy(),
+            energy_coupled=getattr(settings, "think_depth_energy_coupled", True),
+        )
+        logger.info("think_depth_harness effort=%s level=%s reason=%s",
+            decision.effort, decision.level, decision.reason)
+        set_turn_effort(decision.effort)
+        return decision.effort
+
+    def _decision_client_for_effort(self, effort: str | None):
+        """按思考档位取本回合决策 client；变体不可用一律回落主档。"""
+
+        if not effort:
+            return self.decision_client
+        variants = getattr(self, "decision_variants", None)
+        if variants is None:
+            return self.decision_client
+        return variants.for_effort(effort) or self.decision_client
 
     async def run_tools(self, observation, guard, *, decision=None, interactive=False,
                         target_user_id=None, target_message_id=None, direct_group_reply=False, owner_command=None, research_result=None):
@@ -884,7 +946,7 @@ class AutonomousSocialExecutor:
                           "image_count": len(p.images),
                           "text_truncated": len(p.text) > 1200,
                           "published_at": shanghai_aware(p.published_at).isoformat(timespec="seconds")} for p in observation.posts]}, ensure_ascii=False),
-                  "Group policy: 这是连续运行中的一次唤醒，可延续自己的目标，也可发现新兴趣或保持安静。工具是能力清单，没有预设执行顺序。只有确有价值时才发送；禁止CQ控制片段。公开空间只能使用自己的公开兴趣，不能引用群聊或私聊资料。"]
+                  "Group policy: 这是连续运行中的一次唤醒，可延续自己的目标，也可发现新兴趣或保持安静。工具是能力清单，没有预设执行顺序。只有确有价值时才发送；禁止CQ控制片段。公开空间只能使用自己的公开兴趣，不能引用群聊或私聊资料。定时唤醒回合只把任务内容本身发进群（叫醒、日记、提醒等）；'实际完成'、工具名、回执编号、完成情况这类工作汇报绝不发群——群里没人要看你的工作日志，进展写进remember_intention。"]
         if persona_guidance:
             prompt.append('Current persona guidance:\n' + persona_guidance)
         plugin_hook_lines: list[str] = []
@@ -1141,6 +1203,14 @@ class AutonomousSocialExecutor:
 
         async def send(args):
             guard.require_valid()
+            # 工作汇报硬闸：2026-11 实测 agent 会把"实际完成：send_group…（回执xxx）"
+            # 这类任务汇报当消息发进群（23:30 日记、8:00 叫醒回合都犯过）。
+            # 汇报只配进 remember_intention；群消息必须是人话。
+            report_text = str(args.get('text') or '').strip()
+            if job.kind == 'group' and report_text.startswith(('实际完成', '任务完成：', '已完成：send', '已完成:send')):
+                logger.info("group_work_report_blocked preview=%s", report_text[:80])
+                return ToolOutcome({'error': 'work_report_not_group_content',
+                    'guidance': '工作汇报不发群：进展写进remember_intention，只把任务内容本身（叫醒/日记/提醒等）发出去。'}, 'blocked')
             as_forward = bool(args.get('as_forward'))
             video_id = args.get('video_artifact_id')
             bundle_ids = args.get('media_artifact_ids', [])
@@ -1363,6 +1433,164 @@ class AutonomousSocialExecutor:
             tools.append(AgentTool("search_image_origin", "以图搜图：把本群消息里的图拿去搜来源和同系列（pixiv/画师/番剧集数）。有人发图问'这是哪来的''出处是哪''求同款'时用。source_id 传那条带图消息的 source_id（观察里消息自带），不传默认搜当前或被引用的图。同步出结果，一轮一次", {"type": "object",
                 "properties": {"source_id": {"type": "integer", "minimum": 1, "maximum": 2**63 - 1}},
                 "required": [], "additionalProperties": False}, search_image_origin, "read"))
+        if (self.voice_asr is not None or self.music_service is not None) and job.kind == "group":
+            def find_voice_record(source_id):
+                """定位语音消息：给定 source_id → 本身/引用；不给 → 当前/引用/5分钟内同发送者。
+                返回 (row_id, file_uuid, speaker)；找不到返回 (None, None, "")。"""
+                from app.core.memory_source_guard import is_usable_memory_source
+                from app.core.voice_transcribe import extract_record_segment
+                from app.storage.db import session_scope
+                from app.storage.models import Message
+                target_id = source_id or ((current_target or {}).get("source_id") or 0)
+                candidates = []
+                with session_scope(self.router.engine) as session:
+                    if target_id:
+                        target = session.get(Message, target_id)
+                        if target is not None and is_usable_memory_source(target, group_id=job.scope_id):
+                            candidates.append(target)
+                            if target.reply_to_msg_id:
+                                quote = session.scalar(select(Message).where(
+                                    Message.group_id == job.scope_id,
+                                    Message.platform_msg_id == target.reply_to_msg_id))
+                                if quote is not None and is_usable_memory_source(quote, group_id=job.scope_id):
+                                    candidates.append(quote)
+                    if not candidates:
+                        sender_id = (current_target or {}).get("author_id") or 0
+                        anchor = target_id or 0
+                        if sender_id and anchor:
+                            rows = session.scalars(select(Message).where(
+                                Message.group_id == job.scope_id, Message.user_id == sender_id,
+                                Message.id < anchor).order_by(Message.id.desc()).limit(20))
+                            for row in rows:
+                                if not is_usable_memory_source(row, group_id=job.scope_id):
+                                    continue
+                                age = shanghai_aware(observation.now) - shanghai_aware(row.timestamp)
+                                if timedelta(0) <= age <= timedelta(minutes=5):
+                                    candidates.append(row)
+                                else:
+                                    break
+                for row in candidates:
+                    if not row.raw_json:
+                        continue
+                    segment = extract_record_segment(json.loads(row.raw_json))
+                    if segment and (segment.get("file") or segment.get("path")):
+                        payload = json.loads(row.raw_json) if isinstance(row.raw_json, dict) else {}
+                        sender_info = payload.get("sender") or {}
+                        speaker = str(sender_info.get("card") or sender_info.get("nickname") or row.user_id or "")
+                        return row.id, segment.get("file"), speaker
+                return None, None, ""
+
+            async def transcribe_voice(args):
+                guard.require_valid()
+                from app.core.voice_transcribe import (
+                    fetch_record_mp3, to_wav16k_mono, transcribe_sync)
+                source_id = int(args.get("source_id") or 0)
+                if source_id and source_id not in observed_sources:
+                    return ToolOutcome({"error": "voice_source_out_of_scope",
+                        "guidance": "source_id 必须是本轮观察里出现过的消息 id"}, "blocked")
+                row_id, file_id, speaker = await self.blocking.run(find_voice_record, source_id)
+                if not file_id:
+                    return ToolOutcome({"error": "no_voice_found",
+                        "guidance": "没找到可转写的语音：让对方重发一条语音，或把那条消息的 source_id 传进来"}, "blocked")
+                try:
+                    mp3 = await fetch_record_mp3(self.sender, file_id=file_id)
+                    workdir = self.router.runtime.settings.data_dir / "voice_asr_work"
+                    wav = await self.blocking.run(to_wav16k_mono, Path(mp3), workdir)
+                    app_id, api_key, api_secret, accent, language, asr_timeout = self.voice_asr
+                    transcript = await self.blocking.run(
+                        transcribe_sync, wav, app_id=app_id, api_key=api_key,
+                        api_secret=api_secret, accent=accent, language=language,
+                        timeout_seconds=asr_timeout)
+                except OSError as exc:
+                    return ToolOutcome({"error": "voice_transcribe_failed", "detail": str(exc)[:140]}, "failed")
+                return ToolOutcome({"text": transcript.text, "seconds": round(transcript.audio_seconds),
+                    "speaker": speaker, "accent": transcript.accent,
+                    "guidance": "用转写内容自然接话，方言个别字可能不准，按语境理解；别在群里报'转写结果'这种流程腔，直接当听懂了接。"},
+                    "ok" if transcript.text else "failed")
+            tools.append(AgentTool("transcribe_voice", "语音转文字：把群里的QQ语音（包括方言）转成文字。有人发语音问你说了啥、语音太长懒得听、方言听不懂时用。source_id 传那条语音消息的 source_id，不传默认转当前/被引用的语音。同步出结果", {"type": "object",
+                "properties": {"source_id": {"type": "integer", "minimum": 1, "maximum": 2**63 - 1}},
+                "required": [], "additionalProperties": False}, transcribe_voice, "read"))
+        if self.music_service is not None and job.kind == "group":
+            async def identify_voice_music(args):
+                guard.require_valid()
+                from app.core.music_id import identify_music_from_voice
+                from app.core.voice_transcribe import fetch_record_mp3, to_wav16k_mono
+                source_id = int(args.get("source_id") or 0)
+                if source_id and source_id not in observed_sources:
+                    return ToolOutcome({"error": "voice_source_out_of_scope",
+                        "guidance": "source_id 必须是本轮观察里出现过的消息 id"}, "blocked")
+                row_id, file_id, speaker = await self.blocking.run(find_voice_record, source_id)
+                if not file_id:
+                    return ToolOutcome({"error": "no_voice_found",
+                        "guidance": "没找到要听的语音：让对方重发一条语音（哼唱或放歌都行）"}, "blocked")
+                settings = self.router.runtime.settings
+                xfyun_creds = None
+                if all(str(getattr(settings, name, "") or "").strip()
+                       for name in ("music_id_app_id", "music_id_api_key", "music_id_api_secret")):
+                    xfyun_creds = (str(settings.music_id_app_id), str(settings.music_id_api_key),
+                                   str(settings.music_id_api_secret))
+                try:
+                    mp3 = await fetch_record_mp3(self.sender, file_id=file_id)
+                    match = await self.blocking.run(
+                        identify_music_from_voice, Path(mp3),
+                        audd_api_token=str(getattr(settings, "music_id_api_token", "") or ""),
+                        xfyun_creds=xfyun_creds)
+                except OSError as exc:
+                    return ToolOutcome({"error": "voice_music_failed", "detail": str(exc)[:140]}, "failed")
+                if match is None:
+                    return ToolOutcome({"error": "no_match",
+                        "guidance": "没认出歌：哼唱可能走调或片段太短，可以请对方清唱两句重发，或者干脆承认没听出来"}, "failed")
+                kind = {"fingerprint": "原声指纹", "humming": "哼唱识别"}.get(match.source, match.source)
+                return ToolOutcome({"title": match.title, "artist": match.artist,
+                    "album": match.album, "link": match.link, "how": kind,
+                    "guidance": "用转述的口气告诉对方歌名和歌手（哼唱识别容错有限，可用'应该是'的口气）；别报识别方式这种流程腔。"},
+                    "ok")
+            tools.append(AgentTool("identify_voice_music", "听语音认歌：群友发语音哼歌/清唱/外放BGM，认出歌名歌手。有人发语音问'这是什么歌'、哼了半天想不起名字时用（纯原声视频BGM走identify_music）。source_id 传那条语音消息的 source_id，不传默认当前/被引用的语音。同步出结果", {"type": "object",
+                "properties": {"source_id": {"type": "integer", "minimum": 1, "maximum": 2**63 - 1}},
+                "required": [], "additionalProperties": False}, identify_voice_music, "read"))
+        if self.chart_vision is not None and job.kind == "group":
+            async def analyze_chart(args):
+                guard.require_valid()
+                from app.core.chart_vision import analyze_chart_image, sniff_image_type
+                source_id = int(args.get("source_id") or 0)
+                if source_id and source_id not in observed_sources:
+                    return ToolOutcome({"error": "chart_source_out_of_scope",
+                        "guidance": "source_id 必须是本轮观察里出现过的消息 id"}, "blocked")
+                def resolve_pixels():
+                    selection = select_group_image_sources(
+                        self.router.engine, job.scope_id, tuple(observed_sources),
+                        target_source_id=source_id or ((current_target or {}).get("source_id") or None),
+                        now=observation.now, bot_names=aliases or None)
+                    if not selection.source_ids:
+                        return None, selection.reason
+                    with canonical_group_image_inputs(
+                            self.router.engine, job.scope_id, selection.source_ids,
+                            cache_dir=self.router.runtime.settings.data_dir / "image_cache") as pictures:
+                        if not pictures:
+                            return None, "image_pixels_unavailable"
+                        picture = pictures[0]
+                        path = Path(picture.local_path)
+                        return (path.read_bytes(), sniff_image_type(path)), selection.reason
+                try:
+                    image, reason = await self.blocking.run(resolve_pixels)
+                except Exception:
+                    return ToolOutcome({"error": "chart_pixels_failed"}, "failed")
+                if image is None:
+                    return ToolOutcome({"error": "no_chart_found", "reason": str(reason),
+                        "guidance": "没找到图：让对方重发截图，或传那条消息的 source_id"}, "blocked")
+                base_url, api_key, model, cv_timeout = self.chart_vision
+                try:
+                    analysis = await self.blocking.run(
+                        analyze_chart_image, image[0], image[1],
+                        base_url=base_url, api_key=api_key, model=model, timeout_seconds=cv_timeout)
+                except OSError as exc:
+                    return ToolOutcome({"error": "chart_analysis_failed", "detail": str(exc)[:140]}, "failed")
+                return ToolOutcome({"analysis": analysis[:2600],
+                    "guidance": "把解读用自己的懒散口吻转述要点（趋势、关键数字、结论），别照抄全文，别报'图表解读完成'这种流程腔。"},
+                    "ok")
+            tools.append(AgentTool("analyze_chart", "图表精读：看懂群里截图里的折线图/柱状图/饼图/表格截图。有人发图表问'这什么意思''帮我看看'、图表复杂看不过来时用。source_id 传那条图消息的 source_id，不传默认当前/被引用的图。同步出结构化解读", {"type": "object",
+                "properties": {"source_id": {"type": "integer", "minimum": 1, "maximum": 2**63 - 1}},
+                "required": [], "additionalProperties": False}, analyze_chart, "read"))
         if job.kind != "profile":
             name = {"group": "send_group", "qzone_publish": "publish_qzone", "qzone_comment": "comment_qzone"}[job.kind]
             send_schema = schema(text=text_schema(12000 if job.kind == 'group' else 300 if job.kind != "qzone_publish" else 1000), artifact_ids={"type": "array", "items": text_schema(64), "maxItems": 20 if job.kind == 'group' else 2})
@@ -1543,7 +1771,22 @@ class AutonomousSocialExecutor:
             prompt.append("Durable tool receipts (actual platform states; unknown effects must not be replayed):\n"
                 + json.dumps(actual_receipts, ensure_ascii=False))
         from app.agent.social_cadence import cost_bucket
-        agent_options = dict(decision_client=self.decision_client, max_steps=32 if direct_group_reply else job.max_steps,
+        # 思考深度路由：按本回合消息复杂度选 reasoning effort，harness 换
+        # 对应档位的 client 变体（_forward 读当回合 client 的 reasoning_effort）。
+        # 群聊以外的 surface（qzone/公开巡检）不做判定，只清掉回合档位残留。
+        turn_think_effort = None
+        if job.kind == "group":
+            turn_think_effort = self._turn_think_effort(
+                text=(str(current_target.get("text", "")) if current_target else "")
+                     if not owner_command else str(owner_command.get("instruction", "")),
+                has_quote=bool((current_target or {}).get("quoted_message")),
+                explicit_request=bool(direct_group_reply or owner_command),
+            )
+        else:
+            from app.core.think_depth import set_turn_effort
+            set_turn_effort("")
+        agent_options = dict(decision_client=self._decision_client_for_effort(turn_think_effort),
+            max_steps=32 if direct_group_reply else job.max_steps,
             before_call=lambda kind: (kind != 'model' or not hasattr(original_guard, 'reserve_model')
                 or original_guard.reserve_model()) and self.repository.reserve_cost(cost_bucket(kind, job.kind,
                 interactive=interactive and not hasattr(original_guard, 'reserve_model'), owner=bool(owner_authority)),

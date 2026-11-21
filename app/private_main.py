@@ -9,9 +9,13 @@ from app.adapters.sender import Sender
 from app.config import AppSettings, load_runtime_config
 from app.core.chat_style import build_reply_split_config
 from app.runtime.providers import (
+    build_fuzzy_recall_service,
     build_group_image_llm_client,
     build_group_image_reference_planner_client,
     build_image_reference_search_client,
+    build_reverse_image_searcher,
+    build_chart_vision_settings,
+    build_voice_asr_settings,
     build_web_search_client,
 )
 from app.runtime.providers import build_llm_client as _build_llm_client
@@ -99,13 +103,21 @@ async def run() -> None:
         image_reference_planner_client=image_reference_planner_client,
         reply_split_config=build_reply_split_config(settings),
         typing_settings=settings,
+        think_depth_enabled=settings.think_depth_enabled,
+        think_depth_energy_coupled=settings.think_depth_energy_coupled,
         assistant_name=str(runtime.persona.get("name", "小町")),
         persona=runtime.persona,
+        # 主人私聊走粘人精版（dafy_sweet 甜心肥鱼）；群聊形象不变。
+        owner_persona=runtime.personas.get("dafy_sweet"),
         safety=runtime.safety,
     )
     if settings.agent_runtime == "harness":
         from app.private_chat.agent_service import PrivateHarnessService
-        private_chat_service.agent_handler = PrivateHarnessService(private_chat_service, settings=settings, gateway=gateway, runtime=runtime)
+        private_chat_service.agent_handler = PrivateHarnessService(private_chat_service, settings=settings, gateway=gateway, runtime=runtime,
+            reverse_image_searcher=build_reverse_image_searcher(settings=settings),
+            fuzzy_recall_service=build_fuzzy_recall_service(settings=settings, llm_client=llm_client, engine=engine),
+            voice_asr=build_voice_asr_settings(settings=settings),
+            chart_vision=build_chart_vision_settings(settings=settings))
     owner_notice_worker = None
     wish_notice_worker = None
     if settings.agent_runtime == 'harness':
@@ -119,6 +131,27 @@ async def run() -> None:
             connected=lambda: gateway.websocket is not None,
             voice_probability=settings.owner_wish_notice_voice_probability,
             max_voice_daily=settings.owner_wish_notice_max_voice_daily)
+        from app.agent.balance_watch import BalanceAlertWorker
+
+        balance_alert_worker = BalanceAlertWorker(
+            settings=settings, sender=sender,
+            connected=lambda: gateway.websocket is not None)
+        from app.private_chat.pet_events import PetEventsWorker
+
+        pet_events_worker = PetEventsWorker(
+            engine=engine, data_dir=settings.data_dir, owner_qq=settings.owner_qq,
+            bot_qq=settings.bot_qq)
+        from app.agent.owner_chitchat import OwnerChitChatWorker
+
+        owner_chitchat_worker = None
+        owner_persona = runtime.personas.get("dafy_sweet")
+        if settings.owner_chitchat_enabled and owner_persona:
+            owner_chitchat_worker = OwnerChitChatWorker(
+                engine=engine, sender=sender, settings=settings,
+                llm_client=llm_client, owner_persona=owner_persona,
+                connected=lambda: gateway.websocket is not None)
+        elif settings.owner_chitchat_enabled:
+            logging.warning("owner_chitchat_disabled_missing_dafy_sweet_persona")
     reminder_scheduler = PrivateReminderScheduler(
         sender=sender,
         data_dir=settings.data_dir,
@@ -191,6 +224,10 @@ async def run() -> None:
             await owner_notice_worker.start()
         if wish_notice_worker is not None:
             await wish_notice_worker.start()
+        await balance_alert_worker.start()
+        await pet_events_worker.start()
+        if owner_chitchat_worker is not None:
+            await owner_chitchat_worker.start()
         await reminder_scheduler.start()
         await gateway_task
     finally:
@@ -201,6 +238,10 @@ async def run() -> None:
             await owner_notice_worker.stop()
         if wish_notice_worker is not None:
             await wish_notice_worker.stop()
+        await balance_alert_worker.stop()
+        await pet_events_worker.stop()
+        if owner_chitchat_worker is not None:
+            await owner_chitchat_worker.stop()
         await private_chat_service.stop()
         await heartbeat.stop()
         await media_janitor.stop()

@@ -164,6 +164,43 @@ def test_responses_terminal_failure_discards_partial_text_and_tools(event) -> No
     assert captured.value.event == event["type"]
 
 
+def test_responses_max_output_tokens_salvages_partial_text_without_tools() -> None:
+    # 输出预算耗尽在回答中途：已流出的正文是有用的部分输出，抢救而非整轮丢弃。
+    client = LlmClient(base_url="https://api.example.test/v1", api_key="test-key", model="gpt-5.4")
+    body = _sse_events(
+        {"type": "response.output_text.delta", "delta": "部分正文"},
+        {"type": "response.output_text.done", "text": "部分正文"},
+        {"type": "response.incomplete", "response": {"id": "synthetic_truncated",
+            "incomplete_details": {"reason": "max_output_tokens"}}},
+    )
+    result = client._extract_responses_result_from_sse(body, model="gpt-5.4")
+    assert result.text == "部分正文"
+
+
+def test_responses_max_output_tokens_without_text_still_raises() -> None:
+    # 预算耗尽且没有任何正文（截断在推理阶段）：无可用输出，保持抛错。
+    client = LlmClient(base_url="https://api.example.test/v1", api_key="test-key", model="gpt-5.4")
+    body = _sse_events(
+        {"type": "response.incomplete", "response": {"id": "synthetic_empty",
+            "incomplete_details": {"reason": "max_output_tokens"}}},
+    )
+    with pytest.raises(ResponsesProviderError) as captured:
+        client._extract_responses_result_from_sse(body, model="gpt-5.4")
+    assert captured.value.code == "max_output_tokens"
+
+
+def test_responses_other_incomplete_reasons_still_raise() -> None:
+    # 非 max_output_tokens 的 incomplete（如 content_filter）语义不变。
+    client = LlmClient(base_url="https://api.example.test/v1", api_key="test-key", model="gpt-5.4")
+    body = _sse_events(
+        {"type": "response.output_text.delta", "delta": "部分正文"},
+        {"type": "response.incomplete", "response": {"id": "synthetic_filtered",
+            "incomplete_details": {"reason": "content_filter"}}},
+    )
+    with pytest.raises(ResponsesProviderError):
+        client._extract_responses_result_from_sse(body, model="gpt-5.4")
+
+
 def test_responses_search_failure_recovers_with_memory_tools_and_stays_degraded(caplog) -> None:
     requests = []
     calls = []
@@ -3785,3 +3822,55 @@ def test_single_request_budget_keeps_global_default_and_sends_once(monkeypatch):
             client.generate_text(["synthetic input"])
     assert len(calls) == 1
     assert LlmClient.REQUEST_MAX_ATTEMPTS == 3
+
+
+def _payload_client(**kwargs):
+    return LlmClient(base_url="https://api.example.test/v1", api_key="test-key",
+                     model="synthetic", responses_model="synthetic", responses_only=True, **kwargs)
+
+
+def test_responses_payload_effort_defaults_to_client_setting():
+    client = _payload_client(reasoning_effort="low")
+    payload = client._build_responses_payload(model="synthetic", instructions=["a"],
+                                              input_lines=["b"])
+    assert payload["reasoning"] == {"effort": "low"}
+
+
+def test_responses_payload_per_call_effort_overrides():
+    client = _payload_client(reasoning_effort="low")
+    payload = client._build_responses_payload(model="synthetic", instructions=["a"],
+                                              input_lines=["b"], reasoning_effort="high")
+    assert payload["reasoning"] == {"effort": "high"}
+
+
+def test_responses_payload_empty_effort_disables_thinking():
+    # 显式空串=本回合不发 reasoning 键（关闭深度思考）；None=沿用构造档位。
+    client = _payload_client(reasoning_effort="low")
+    payload = client._build_responses_payload(model="synthetic", instructions=["a"],
+                                              input_lines=["b"], reasoning_effort="")
+    assert "reasoning" not in payload
+    payload_default = client._build_responses_payload(model="synthetic", instructions=["a"],
+                                                      input_lines=["b"], reasoning_effort=None)
+    assert payload_default["reasoning"] == {"effort": "low"}
+
+
+def test_responses_payload_invalid_effort_degrades_to_off():
+    client = _payload_client(reasoning_effort="low")
+    payload = client._build_responses_payload(model="synthetic", instructions=["a"],
+                                              input_lines=["b"], reasoning_effort="bogus")
+    assert "reasoning" not in payload
+
+
+def test_generate_text_forwards_per_call_effort():
+    seen = {}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        seen["effort"] = json.loads(request.content.decode())["reasoning"]["effort"]
+        return httpx.Response(200, json={"id": "synthetic", "output": [
+            {"type": "message", "content": [{"type": "output_text", "text": "ok"}]},
+        ]})
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+        client = _payload_client(reasoning_effort="low", http_client=http)
+        assert client.generate_text(["synthetic input"], reasoning_effort="high") == "ok"
+    assert seen["effort"] == "high"

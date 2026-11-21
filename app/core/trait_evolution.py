@@ -332,10 +332,7 @@ class TraitEvolutionService:
         return merged
 
     def _build_client(self):
-        from app.providers.llm_client import (
-            LlmClient,
-            default_auxiliary_reasoning_effort,
-        )
+        from app.providers.llm_client import LlmClient
 
         return LlmClient(
             base_url=self._settings.llm_base_url,
@@ -344,8 +341,10 @@ class TraitEvolutionService:
             fallback_model="",
             responses_only=True,
             responses_model=self._settings.llm_model,
-            max_output_tokens=1024,
+            max_output_tokens=2048,
             timeout_seconds=90.0,
-            reasoning_effort=default_auxiliary_reasoning_effort(self._settings.llm_model),
+            # 辅助小任务用 low：medium 的推理 token 会吃光输出预算，
+            # 连正文都产不出（部署后实测 deepseek-flash 仍截断无文本）。
+            reasoning_effort="low",
             request_max_attempts=1,
         )

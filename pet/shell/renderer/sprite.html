@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8">
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; user-select: none; cursor: default; }
+  #wrap { position: absolute; inset: 0; display: grid; place-items: end center; }
+  #body {
+    max-width: 94%; max-height: 92%;
+    transform-origin: 50% 100%;   /* 以脚底为锚：呼吸/挤压不悬空 */
+    will-change: transform;
+    filter: drop-shadow(0 10px 22px rgba(20,30,60,.35));
+  }
+  #body.night { filter: brightness(.72) drop-shadow(0 10px 22px rgba(20,30,60,.35)); }
+  #bubble {
+    position: absolute; max-width: 240px; padding: 9px 13px;
+    background: #ffffffee; color: #1b2430; border-radius: 14px 14px 14px 3px;
+    font: 13px/1.55 "Segoe UI", "Microsoft YaHei", sans-serif;
+    box-shadow: 0 6px 18px #0004; opacity: 0; transition: opacity .25s;
+    pointer-events: none; white-space: pre-wrap; word-break: break-word;
+    left: 50%; transform: translateX(-50%); top: 4px;
+  }
+  #bubble.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="wrap"><img id="body" draggable="false" alt=""></div>
+<div id="bubble"></div>
+<script type="module" src="./sprite.js"></script>
+</body></html>

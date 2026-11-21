@@ -222,6 +222,29 @@ def build_group_persona_context(
     fingerprint = hashlib.sha256((str(key) + "\n" + fingerprint).encode("utf-8")).hexdigest()
     source_ids, style_text = (), ""
     subject_id = _positive_int(profile.get("source_user_id")) if impersonating and same_source_group else None
+    corpus_style_retrieval = (
+        not impersonating
+        and bool(getattr(router.runtime.settings, "corpus_style_retrieval_enabled", True))
+    )
+    if corpus_style_retrieval:
+        # 语料向量库：非仿人格回合按当前消息检索"相似情境下真人的接法"。
+        # fail-soft（未建库/嵌入通道不可用一律零注入），与仿人格例句互斥。
+        target, recent, quote = _canonical_inputs(router, group_id, source_message_ids, target_message_id)
+        if target is not None:
+            try:
+                from app.core.style_corpus import render_corpus_block, retrieve_similar
+
+                corpus_hits = retrieve_similar(
+                    router.engine, router.runtime.settings, target.plain_text,
+                    kind=0,
+                    limit=int(getattr(router.runtime.settings, "corpus_style_max_examples", 2)),
+                    min_cosine=float(getattr(router.runtime.settings, "corpus_style_min_cosine", 0.60)),
+                )
+                corpus_block = render_corpus_block(corpus_hits)
+                if corpus_block:
+                    style_text = "\n" + corpus_block
+            except Exception:
+                logger.warning("agent_style_corpus_degraded", exc_info=True)
     if impersonating and same_source_group:
         target, recent, quote = _canonical_inputs(router, group_id, source_message_ids, target_message_id)
         if target is not None:

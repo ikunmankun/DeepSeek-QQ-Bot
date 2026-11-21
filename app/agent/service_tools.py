@@ -28,6 +28,7 @@ from app.agent.memory_integration import (
 )
 from app.agent.social_planner import SocialPlanner
 from app.agent.tool_agent import AgentTool, ToolOutcome
+from app.core.image_color_stats import compute_color_stats
 from app.core.memory_source_guard import is_usable_memory_source
 from app.core.memory_tool_executor import MemoryToolExecutor
 from app.core.memory_tools import DEFAULT_MEMORY_TOOL_TIMEOUT_SECONDS, memory_tool_schemas
@@ -567,6 +568,35 @@ def build_service_tools(context: ServiceToolContext) -> tuple[AgentTool, ...]:
             "ok" if result else "failed", images=tuple(item[1] for item in result))
     tools.append(AgentTool("observe_group_images", "读取已观察来源的真实群图片并保存可复用产物；不会猜测未见像素",
         _object(source_ids={"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 2**63 - 1}, "maxItems": 24}), observe_images))
+
+    async def analyze_image_colors(args):
+        require_valid()
+        requested = set(args["source_ids"])
+        if not requested.issubset(context.observed_sources):
+            return ToolOutcome({"error": "image_source_out_of_scope"}, "blocked")
+
+        def materialize_stats():
+            require_valid()
+            with canonical_group_image_inputs(router.engine, job.scope_id, tuple(sorted(requested)),
+                    cache_dir=runtime.settings.data_dir / "image_cache") as pictures:
+                results = []
+                for picture in pictures:
+                    require_valid()
+                    stats = compute_color_stats(Path(picture.local_path).read_bytes())
+                    results.append((picture.source_message_id, picture.source_user_id, stats))
+                return results
+
+        results = await context.blocking.run(materialize_stats)
+        require_valid()
+        return ToolOutcome({"images": [{"message_id": message_id, "author_id": author_id,
+            "stats": stats} for message_id, author_id, stats in results],
+            "guidance": "stats是客观像素测量：中性区RGB差=白平衡偏色方向和强度，对比度std/暗部高光占比是明暗判断，"
+                        "转述时引用这些真实数字（如'中性区蓝比红高15%，偏冷'），别换成'我觉得看起来'。多张图逐张报。"},
+            "ok" if results else "failed")
+    tools.append(AgentTool("analyze_image_colors", "图片客观色彩分析：对已观察来源的图片做像素级统计——"
+        "偏色方向和强度（白平衡）、平均亮度、暗部/高光占比、对比度、饱和度、主色调。"
+        "有人问'这图颜色偏没偏''怎么感觉发灰''是不是过曝了'时用，回答有真实数字支撑。不需要看图的视觉能力，纯文本模型可用。同步出结果",
+        _object(source_ids={"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 2**63 - 1}, "maxItems": 4}), analyze_image_colors))
 
     tasks = context.task_service
     if tasks is not None:

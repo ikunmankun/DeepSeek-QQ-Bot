@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>大肥鱼 · 记忆星图</title><link rel="stylesheet" href="/memory.css"></head>
+<body>
+<header class="map-header">
+  <div class="brand"><span class="brand-mark">鲸</span><div><h1>大肥鱼 · 记忆星图</h1><p>亮度＝记忆强度 · 越暗越接近遗忘</p></div></div>
+  <div class="header-actions"><span id="status" class="chip">正在连接</span><span id="generated" class="muted small">尚未加载</span><button id="refresh" class="quiet" type="button">立即刷新</button><a class="quiet" href="/diary">日记本</a><a class="quiet" href="/">返回 Agent 现场</a></div>
+</header>
+<main class="map-main">
+  <section class="canvas-wrap">
+    <canvas id="sky" aria-label="记忆星图"></canvas>
+    <div id="tip" class="tip" hidden></div>
+    <div id="empty" class="empty" hidden><div class="empty-icon">✧</div><h2>星图还没生成</h2><p id="empty-reason">记忆快照每 5 分钟导出一次，稍后刷新即可。</p></div>
+    <div class="hint">滚轮缩放 · 拖拽平移 · 悬停查看 · 点击固定</div>
+  </section>
+  <aside class="panel">
+    <section class="block"><h2>概要</h2><div class="stats" id="stats"></div></section>
+    <section class="block"><h2>记忆类型</h2><div id="legend" class="legend"></div></section>
+    <section class="block grow"><h2>即将遗忘</h2><p class="muted small">按归档倒计时排序，点一条在星图上定位。</p><div id="fading" class="fading"></div></section>
+    <section class="block note"><p class="muted small">星图只读：数据来自机器人进程导出的记忆快照，网页不触发对话、不改记忆。永不遗忘＝禁忌/关系/画像/称呼规则/已晋升的身份级记忆。</p></section>
+  </aside>
+</main>
+<script src="/memory.js" defer></script>
+</body></html>

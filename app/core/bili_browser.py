@@ -291,7 +291,7 @@ class BiliBrowserService:
                 self.latest_findings.append((datetime.now().timestamp(), finding))
                 self.latest_findings = self.latest_findings[-4:]
                 self.writer.write(
-                    text=finding, now=shanghai_now_naive(), mood=None)
+                    text=finding, now=shanghai_now_naive(), mood=None, tag="逛B站")
 
     async def _read_video(self, page, entry: dict) -> str:
         """打开一个视频页，滚到评论区截图，视觉模型解读；返回要点文本。"""

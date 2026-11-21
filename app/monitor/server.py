@@ -10,7 +10,10 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from app.agent.runtime_trace import TraceReader
+from app.monitor.diary_map import DiaryMapReader
+from app.monitor.memory_map import MemoryMapReader
 from app.monitor.metrics import ConversationMetrics
+from app.monitor.pet_events import PetEventsReader
 from app.monitor.records import MonitorRecords
 
 
@@ -18,6 +21,9 @@ def create_server(root: Path, *, port=8765):
     reader = TraceReader(root)
     metrics = ConversationMetrics(reader)
     records = MonitorRecords(reader)
+    memory_map = MemoryMapReader(root)
+    diary_map = DiaryMapReader(root)
+    pet_events = PetEventsReader(root)
     records.purge_pending()
     deletion_token = secrets.token_urlsafe(24)
     static = Path(__file__).with_name("static")
@@ -63,6 +69,12 @@ def create_server(root: Path, *, port=8765):
                     return self._reply(200, {'record_deletion': True, 'deletion_token': deletion_token})
                 if path == "/api/traces":
                     return self._reply(200, {"traces": reader.list_traces(), "read_only": True})
+                if path == "/api/memory-map":
+                    return self._reply(200, memory_map.read())
+                if path == "/api/diary":
+                    return self._reply(200, diary_map.read())
+                if path == "/api/pet-events":
+                    return self._reply(200, pet_events.read())
                 if path == '/api/conversations':
                     return self._reply(200, {'conversations': reader.list_conversations(), 'read_only': True})
                 if path.startswith('/api/conversations/'):
@@ -82,7 +94,13 @@ def create_server(root: Path, *, port=8765):
                     return self._reply(400, {"error": "request_invalid"})
                 assets = {"/": ("index.html", "text/html; charset=utf-8"),
                           "/app.js": ("app.js", "text/javascript; charset=utf-8"),
-                          "/style.css": ("style.css", "text/css; charset=utf-8")}
+                          "/style.css": ("style.css", "text/css; charset=utf-8"),
+                          "/memory": ("memory.html", "text/html; charset=utf-8"),
+                          "/memory.js": ("memory.js", "text/javascript; charset=utf-8"),
+                          "/memory.css": ("memory.css", "text/css; charset=utf-8"),
+                          "/diary": ("diary.html", "text/html; charset=utf-8"),
+                          "/diary.js": ("diary.js", "text/javascript; charset=utf-8"),
+                          "/diary.css": ("diary.css", "text/css; charset=utf-8")}
                 if path in assets:
                     name, mime = assets[path]
                     return self._reply(200, (static / name).read_bytes(), mime)

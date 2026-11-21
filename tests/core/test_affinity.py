@@ -38,10 +38,12 @@ def test_decay_toward_zero(sqlite_engine):
 
 
 def test_levels_qualitative_order():
+    assert affinity_level(9.0) == "死党"
     assert affinity_level(7.0) == "老朋友"
     assert affinity_level(4.0) == "熟人"
     assert affinity_level(1.0) == "认识"
     assert affinity_level(-1.0) == "有点相处不快"
+    assert affinity_level(-8.0) == "疏远"
     assert clamp_score(-99) == -10.0
 
 

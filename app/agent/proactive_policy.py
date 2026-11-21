@@ -71,7 +71,12 @@ def admit_proactive(router, observation, guard, *, interactive, clock):
     due = bool(getattr(guard, 'trace_trigger', {}).get('trigger_reason_code') == 'intention_due')
     permit, reason, metrics = repository.claim(group_id, candidates=candidates,
         bootstrap_cursor=max(0, bootstrap), max_source_id=seen, limits=limits, due_goal=due)
-    logger.info('proactive_observation group_id=%s reason=%s new_messages=%s cursor=%s model_requests_hour=%s',
-        group_id, reason or 'admitted', metrics['observation_new_messages'], metrics['observation_cursor'],
-        metrics['proactive_model_requests_hour'])
+    if metrics['observation_new_messages'] or not reason:
+        logger.info('proactive_observation group_id=%s reason=%s new_messages=%s cursor=%s model_requests_hour=%s',
+            group_id, reason or 'admitted', metrics['observation_new_messages'], metrics['observation_cursor'],
+            metrics['proactive_model_requests_hour'])
+    else:
+        # 无新消息的空转观察是常态，info 每轮一行刷屏；降为 debug。
+        logger.debug('proactive_observation group_id=%s reason=%s new_messages=0 cursor=%s',
+            group_id, reason, metrics['observation_cursor'])
     return (ProactiveTurn(guard, repository, permit, limits, metrics) if permit else None), reason

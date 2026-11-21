@@ -109,6 +109,16 @@ def test_prompt_line_speaks_state_without_tone_instructions(sqlite_engine):
     assert "表情包" not in night_line
 
 
+def test_intensity_adverb_three_bands():
+    from app.core.group_mood import mood_intensity_adverb
+
+    assert mood_intensity_adverb(0.3) == "有点"
+    assert mood_intensity_adverb(1.0) == "相当"
+    assert mood_intensity_adverb(1.2) == "相当"
+    assert mood_intensity_adverb(1.5) == "顶格"
+    assert mood_intensity_adverb(2.0) == "顶格"
+
+
 def test_unknown_mood_row_falls_back_to_ambient():
     row = SimpleNamespace_row(mood="gadget", intensity=1.5, updated_at=DAY)
     assert effective_mood_state(row, DAY) == ("default", 0.0)

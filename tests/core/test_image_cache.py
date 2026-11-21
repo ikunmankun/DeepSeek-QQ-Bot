@@ -91,3 +91,61 @@ def test_cache_images_in_raw_payload_downloads_multiple_images_in_parallel_and_c
         decoded = Image.open(io.BytesIO(optimized))
         assert max(decoded.size) <= 1280
 
+
+def test_refresh_image_urls_swaps_dead_url(tmp_path) -> None:
+    """napcat 给的 CDN 链到手即死（rkey 过期）：入库前经 get_image 换新鲜链接。"""
+    import asyncio
+    from app.core.image_cache import refresh_image_urls
+
+    payload = {"message": [{"type": "image", "data": {
+        "file": "ABC.webp", "url": "https://multimedia.nt.qq.com.cn/dead?rkey=old"}}]}
+    calls = []
+
+    async def fake_call_api(action, params):
+        calls.append((action, params))
+        return {"data": {"url": "https://multimedia.nt.qq.com.cn/fresh?rkey=new",
+                         "file": "ABC.webp"}}
+
+    refreshed = asyncio.run(refresh_image_urls(payload, fake_call_api))
+    assert refreshed == 1
+    assert calls == [("get_image", {"file": "ABC.webp"})]
+    assert payload["message"][0]["data"]["url"].endswith("rkey=new")
+
+
+def test_refresh_image_urls_uses_napcat_local_file(tmp_path) -> None:
+    """get_image 回 napcat 本地路径且文件可读（ro 挂载路径一致）：直接带 local_path。"""
+    import asyncio
+    from app.core.image_cache import refresh_image_urls
+
+    napcat_file = tmp_path / "pic.webp"
+    napcat_file.write_bytes(b"fake")
+    payload = {"message": [{"type": "image", "data": {"file": "ABC.webp"}}]}
+
+    async def fake_call_api(action, params):
+        return {"data": {"file": str(napcat_file), "url": ""}}
+
+    refreshed = asyncio.run(refresh_image_urls(payload, fake_call_api))
+    assert refreshed == 1
+    assert payload["message"][0]["data"]["local_path"] == str(napcat_file)
+
+
+def test_refresh_image_urls_skips_local_and_failures(tmp_path) -> None:
+    """已有本地路径的跳过；API 失败自吞不抛。"""
+    import asyncio
+    from app.core.image_cache import refresh_image_urls
+
+    local = tmp_path / "already.webp"
+    local.write_bytes(b"x")
+    payload = {"message": [
+        {"type": "image", "data": {"file": "A.webp", "local_path": str(local)}},
+        {"type": "image", "data": {"file": "B.webp"}},
+    ]}
+
+    async def failing_call_api(action, params):
+        raise RuntimeError("ws down")
+
+    refreshed = asyncio.run(refresh_image_urls(payload, failing_call_api))
+    assert refreshed == 0
+    # 已有 local_path 的没被动过，也没有凭空造出 url
+    assert "url" not in payload["message"][0]["data"]
+    assert payload["message"][0]["data"]["local_path"] == str(local)

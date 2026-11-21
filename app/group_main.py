@@ -37,6 +37,8 @@ from app.main import (
     build_music_identification_service,
     build_proactive_judge_client,
     build_reverse_image_searcher,
+    build_voice_asr_settings,
+    build_chart_vision_settings,
     build_usage_recorder,
     build_web_search_client,
     create_runtime_banner,
@@ -561,11 +563,14 @@ async def run() -> None:
         from app.agent.plugins.bili_browser import BilibiliBrowserFeature
         from app.agent.plugins.interactions import PokeFeature, WelcomeFeature
         from app.agent.plugins.summary import ChatSummaryFeature
+        from app.agent.plugins.document_digest import DocumentDigestFeature
         from app.agent.plugins.voice import VoiceFeature
         from app.agent.plugins.web_hands import WebHandsFeature
+        from app.agent.plugins.memory_map import MemoryMapFeature
         from app.agent.plugins.trait_evolution import TraitEvolutionFeature
         from app.agent.plugins.social_learning import SilenceLearningFeature
         from app.agent.plugins.reminders import ReminderFeature
+        from app.agent.plugins.vitality import VitalityFeature
 
         bilibili_feature = BilibiliFeature()
         bilibili_feature.attach_engine(engine)
@@ -588,6 +593,8 @@ async def run() -> None:
             persona_text=str(runtime.persona.get("identity", "") or ""))
         voice_feature = VoiceFeature()
         voice_feature.attach(settings=settings)
+        document_digest_feature = DocumentDigestFeature()
+        document_digest_feature.attach(settings=settings)
         trait_evolution_feature = TraitEvolutionFeature()
         trait_evolution_feature.attach(
             engine=engine,
@@ -610,6 +617,14 @@ async def run() -> None:
             bot_qq=settings.bot_qq,
             reflect_hook=diary_feature._service._reflect_hook if False else None,
             settings=settings, data_dir=settings.data_dir)
+        memory_map_feature = MemoryMapFeature()
+        memory_map_feature.attach(engine=engine, settings=settings)
+        from app.agent.plugins.diary_map import DiaryMapFeature
+
+        diary_map_feature = DiaryMapFeature()
+        diary_map_feature.attach(settings=settings)
+        vitality_feature = VitalityFeature()
+        vitality_feature.attach(engine=engine, settings=settings)
         plugin_registry = FeatureRegistry([
             StickerFeature(),
             diary_feature,
@@ -619,6 +634,7 @@ async def run() -> None:
             sticker_learning_feature,
             slang_feature,
             bilibili_feature,
+            bili_browser_feature,
             trait_evolution_feature,
             silence_learning_feature,
             reminder_feature,
@@ -628,6 +644,10 @@ async def run() -> None:
             ChatSummaryFeature(),
             web_hands_feature,
             voice_feature,
+            document_digest_feature,
+            memory_map_feature,
+            diary_map_feature,
+            vitality_feature,
         ])
         plugin_worker_tasks = await plugin_registry.start_workers()
         # 夜间反思后的钩子链：日记写完 → 议程生成 → 愿望提取（私信主人）
@@ -712,6 +732,8 @@ async def run() -> None:
             participation_planner.autonomous_executor = AutonomousSocialExecutor(
                 router=router, sender=sender, qzone_adapter=QzoneAdapter(gateway), decision_client=llm_client,
                 image_service=group_image_service, reverse_image_searcher=reverse_image_searcher,
+                voice_asr=build_voice_asr_settings(settings=settings),
+                chart_vision=build_chart_vision_settings(settings=settings),
                 profile_adapter=AccountProfileAdapter(gateway,
                     account_id=settings.bot_qq, allowed_group_ids=tuple(enabled_group_ids),
                     media_roots=((settings.data_dir / "autonomous_artifacts").resolve(),)))
@@ -794,6 +816,7 @@ async def run() -> None:
             if group_agent is not None:
                 # A live event may already exist from history backfill; the
                 # durable agent inbox owns live-observation deduplication.
+                await router.refresh_inbound_image_urls(event)
                 router.ingest_live_group_message(event)
                 if await router.try_handle_context_reset(event,
                         cancel_group=lambda group_id: group_agent.cancel_group(group_id, resume_pending=True)):

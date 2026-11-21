@@ -79,3 +79,49 @@ def test_ddgs_image_reference_search_keeps_its_existing_model_independent_shape(
         assert client.provider == "ddgs"
     finally:
         client.http_client.close()
+
+
+def test_decision_client_variants_share_transport_and_usage():
+    """按档位的决策 client 变体：共享连接池/用量统计，effort 各自正确。"""
+
+    from app.runtime.providers import DecisionClientVariants
+
+    settings = AppSettings(
+        _env_file=None,
+        bot_qq=900000099,
+        owner_qq=900000101,
+        napcat_ws_url="ws://synthetic.invalid/ws",
+        llm_base_url="https://api.example.test/v1",
+        llm_api_key="test-key",
+        llm_model="synthetic",
+        llm_fallback_model="synthetic",
+        llm_reasoning_effort="low",
+    )
+    usage_calls = []
+
+    def usage_recorder(usage):
+        usage_calls.append(usage)
+
+    from app.providers.llm_client import LlmClient
+
+    primary = LlmClient(
+        base_url=settings.llm_base_url,
+        api_key=settings.llm_api_key,
+        model="synthetic",
+        fallback_model="",
+        responses_model="synthetic",
+        responses_only=True,
+        reasoning_effort="low",
+        usage_recorder=usage_recorder,
+    )
+    variants = DecisionClientVariants(settings=settings, primary=primary)
+    # 主档位请求变体 → None（直接沿用主 client）。
+    assert variants.for_effort("low") is None
+    assert variants.for_effort(None) is None
+    high = variants.for_effort("high")
+    assert high is not None and high.reasoning_effort == "high"
+    assert high.http_client is primary.http_client
+    assert high.usage_recorder is primary.usage_recorder
+    # 同档位缓存复用同一实例；假 client 一律 None。
+    assert variants.for_effort("high") is high
+    assert DecisionClientVariants(settings=settings, primary=object()).for_effort("high") is None

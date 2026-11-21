@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import mimetypes
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import httpx
 
@@ -12,6 +13,62 @@ from app.core.image_optimizer import optimize_image_bytes
 
 
 logger = logging.getLogger(__name__)
+
+
+async def refresh_image_urls(
+    raw_payload: dict[str, Any],
+    call_api: Callable[[str, dict[str, Any]], Awaitable[Any]],
+    *,
+    timeout_seconds: float = 8.0,
+) -> int:
+    """入库前把 napcat 给的图片链接换新鲜：CDN 链接带短时效 rkey，到手常已
+    死（2026-10-29 起实测全 400，图片缓存/表情收藏因此断流）。
+
+    经 OneBot ``get_image`` 按 file_id 换新链接；napcat 若回本地路径（bot
+    对 napcat 的 ntqq/cache 目录有只读挂载，路径一致可直接读）也一并带上。
+    每条消息至多换 4 张；失败自吞（换不到就走原链接，行为与从前一致）。
+    返回成功刷新的张数。
+    """
+
+    message = raw_payload.get("message") if isinstance(raw_payload, dict) else None
+    if not isinstance(message, list):
+        return 0
+    refreshed = 0
+    for item in message[:8]:
+        if not (isinstance(item, dict) and item.get("type") == "image"):
+            continue
+        data = item.setdefault("data", {})
+        if not isinstance(data, dict):
+            continue
+        if str(data.get("local_path") or "").strip():
+            continue  # napcat 已给本地文件，不用换
+        file_id = str(data.get("file") or "").strip()
+        if not file_id:
+            continue
+        try:
+            response = await asyncio.wait_for(
+                call_api("get_image", {"file": file_id}), timeout=timeout_seconds)
+        except Exception:
+            continue
+        payload = response.get("data") or {} if isinstance(response, dict) else {}
+        if not isinstance(payload, dict):
+            continue
+        fresh_url = str(payload.get("url") or "").strip()
+        if fresh_url.startswith("http"):
+            data["url"] = fresh_url
+            refreshed += 1
+        napcat_file = str(payload.get("file") or "").strip()
+        if napcat_file.startswith("/"):
+            # napcat 本地绝对路径：bot 以相同路径只读挂载，下载兜底可直接读
+            try:
+                if Path(napcat_file).is_file():
+                    data["local_path"] = napcat_file
+                    refreshed += 1
+            except OSError:
+                pass
+    if refreshed:
+        logger.debug("image_url_refreshed count=%s", refreshed)
+    return refreshed
 
 
 def _guess_media_type(*, image_url: str, response: httpx.Response) -> str | None:
