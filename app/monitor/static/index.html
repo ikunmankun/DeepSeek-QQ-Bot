@@ -1,17 +1,17 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>小町 · Agent 现场</title><link rel="stylesheet" href="/style.css"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>大肥鱼 · Agent 现场</title><link rel="stylesheet" href="/style.css"></head>
 <body>
 <div class="workspace">
 <aside class="sidebar">
- <div class="brand"><span class="brand-mark">町</span><div><h1>小町 · Agent 现场</h1><p>持续对话与执行过程</p></div></div>
+ <div class="brand"><span class="brand-mark" role="img" aria-label="大肥鱼">町</span><div><h1>大肥鱼 · Agent 现场</h1><p>持续对话与执行过程</p></div></div>
  <div class="sidebar-heading"><h2>会话</h2><span id="conversation-count">0</span></div>
  <div class="filters"><select id="surface" aria-label="筛选会话"><option value="all">全部会话</option><option value="group">群聊</option><option value="private">私聊</option><option value="public">公开任务</option></select><input id="search" placeholder="搜索群、用户或任务" aria-label="搜索会话"></div>
  <nav id="conversations" class="conversations" aria-label="Agent会话"></nav>
  <div class="sidebar-footer"><span id="connection">正在连接</span><p>仅本机 · 可删除监控记录 · 最近24小时</p><a class="map-link" href="/memory">记忆星图 →</a> <a class="map-link" href="/diary">日记本 →</a> <button id="pause" class="quiet">暂停更新</button></div>
 </aside>
 <main class="main">
- <section id="empty" class="empty"><div class="empty-icon">◌</div><h2>等待 Agent 会话</h2><p>新回合会按所属会话连续排列。<br>打开网页不触发执行，也不额外请求模型。</p></section>
+ <section id="empty" class="empty"><div class="empty-icon"><img src="/dafeiyu.png" alt="" aria-hidden="true"></div><h2>等待 Agent 会话</h2><p>新回合会按所属会话连续排列。<br>打开网页不触发执行，也不额外请求模型。</p></section>
  <div id="detail" class="detail" hidden>
   <header class="conversation-header"><div><div id="scope-label" class="eyebrow"></div><h2 id="conversation-title"></h2><p id="conversation-subtitle"></p></div><div class="header-actions"><span id="conversation-status" class="chip"></span><button id="delete-selected" class="quiet danger">删除记录</button><button id="open-input" class="quiet">模型输入</button></div></header>
   <div class="conversation-info"><span id="identity-note"></span><label><input id="follow" type="checkbox" checked>跟随最新过程</label></div>

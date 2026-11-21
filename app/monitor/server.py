@@ -100,7 +100,8 @@ def create_server(root: Path, *, port=8765):
                           "/memory.css": ("memory.css", "text/css; charset=utf-8"),
                           "/diary": ("diary.html", "text/html; charset=utf-8"),
                           "/diary.js": ("diary.js", "text/javascript; charset=utf-8"),
-                          "/diary.css": ("diary.css", "text/css; charset=utf-8")}
+                          "/diary.css": ("diary.css", "text/css; charset=utf-8"),
+                          "/dafeiyu.png": ("assets/dafeiyu.png", "image/png")}
                 if path in assets:
                     name, mime = assets[path]
                     return self._reply(200, (static / name).read_bytes(), mime)

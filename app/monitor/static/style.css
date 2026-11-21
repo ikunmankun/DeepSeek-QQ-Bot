@@ -12,3 +12,26 @@
 @media(max-width:1320px){.usage-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:8px 16px}.usage-grid strong{font-size:14px}.usage-footer{padding:9px 16px}}
 @media(max-width:650px){.workspace{grid-template-columns:minmax(0,1fr)}.usage-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 12px}.usage-grid strong{font-size:13px}.usage-grid small{font-size:9px}.usage-footer{padding:7px 14px}.usage-coverage{font-size:9px}}
 .map-link{display:inline-block;margin-right:8px;font-size:11px;color:var(--accent);text-decoration:none;border:1px solid var(--line);border-radius:7px;padding:5px 10px}.map-link:hover{background:#303138}
+
+/* ==== 大肥鱼深海主题（2026-11-22）==== */
+:root{--bg:#0a1220;--sidebar:#0d1626;--panel:#101c30;--line:#223a55;--text:#e8f0fb;--muted:#8fa8c8;--accent:#6fb3ff}
+body{background:
+ radial-gradient(1000px 520px at 80% -10%,rgba(111,179,255,.10),transparent 62%),
+ radial-gradient(760px 460px at -8% 110%,rgba(111,179,255,.09),transparent 60%),
+ radial-gradient(circle at 50% 46%,rgba(111,179,255,.05) 0 24px,transparent 25px),
+ radial-gradient(circle at 18% 78%,rgba(111,179,255,.04) 0 14px,transparent 15px),
+ radial-gradient(circle at 86% 64%,rgba(111,179,255,.04) 0 18px,transparent 19px),
+ linear-gradient(180deg,#0c1526,#0a1220 58%,#0a1424)}
+.sidebar{background:#0d1626}
+.brand-mark{background:url("/dafeiyu.png") center 12%/cover no-repeat,#0e1a2c;font-size:0;color:transparent;border:1px solid rgba(111,179,255,.45);box-shadow:0 4px 14px rgba(0,0,0,.35)}
+.brand h1{font-size:15px}
+.empty-icon{font-size:0;background:none}
+.empty-icon img{width:170px;height:auto;filter:drop-shadow(0 10px 28px rgba(111,179,255,.30))}
+.sidebar-footer{border-top:1px solid var(--line);position:relative}
+.sidebar-footer::before{content:"";display:block;height:2px;margin:10px 0 8px;border-radius:1px;
+ background:linear-gradient(90deg,transparent,rgba(111,179,255,.45),transparent)}
+.quiet:hover{background:#16263c}
+.map-link{color:#8fcaff}
+.main-footer{background:#0c1626}
+.detail .conversation-header{border-color:var(--line)}
+.chip{border-color:var(--line);background:var(--panel)}
